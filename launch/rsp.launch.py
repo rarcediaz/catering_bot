@@ -61,7 +61,7 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='map_to_base_link',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'chassis'],
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'base_link'],
         output='screen'
     )
 
