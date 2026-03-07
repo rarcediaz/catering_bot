@@ -24,7 +24,7 @@
         </xacro:inertial_cylinder>
     </link>
 
-    <gazebo reference="laser_frame">
+    <!-- <gazebo reference="laser_frame">
         <sensor name="lidar2" type="gpu_lidar">
             <always_on>true</always_on>
             <update_rate>10</update_rate>
@@ -48,6 +48,6 @@
                 </range>
             </lidar>
         </sensor>
-    </gazebo>
+    </gazebo> -->
 
 </robot>
