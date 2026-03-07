@@ -32,7 +32,7 @@
 
             <!-- Standard ROS topic -->
             <topic>scan</topic>
-            <gz_frame_id>laser_frame</gz_frame_id>
+            <frame_id>laser_frame</frame_id>
 
             <lidar>
                 <horizontal>
