@@ -53,11 +53,22 @@ def generate_launch_description():
         output='screen'
     )
 
+
+    # ----------------------------
+    # Static transform map -> chassis
+    # ----------------------------
+    static_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='map_to_base_link',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'chassis'],
+        output='screen'
+    )
+
     # ----------------------------
     # Launch everything
     # ----------------------------
     return LaunchDescription([
-
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',
@@ -65,5 +76,6 @@ def generate_launch_description():
         ),
 
         node_robot_state_publisher,
-        ydlidar_node
+        ydlidar_node,
+        static_tf_node
     ])
