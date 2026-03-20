@@ -29,6 +29,16 @@ def generate_launch_description():
         }.items()
     )
 
+    # JoyStick
+
+
+    joystick = IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([os.path.join(
+                    get_package_share_directory(package_name),'launch','joystick.launch.py'
+                )])
+    )
+
+
     # YDLidar Launch
     ydlidar = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -51,6 +61,7 @@ def generate_launch_description():
         package='controller_manager',
         executable='ros2_control_node',
         parameters=[controller_params_file],
+        remappings=[('~/robot_description', '/robot_description')],
         output='screen'
     )
 
@@ -109,6 +120,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         rsp,
+        joystick,
         ydlidar,
         delayed_controller_manager,
         delayed_diff_drive_spawner,
