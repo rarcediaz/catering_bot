@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
 
-    package_name='my_bot' #<--- CHANGE ME
+    package_name='my_bot' 
 
     use_sim_time = LaunchConfiguration('use_sim_time')
 
@@ -24,7 +24,7 @@ def generate_launch_description():
         executable='teleop_node',
         name = 'teleop_node',
         parameters=[{'use_sim_time': use_sim_time}, joy_params],
-        remappings={('/cmd_vel', '/cmd_vel_joy')},
+        remappings=[('/cmd_vel', '/cmd_vel_joy')],
     )
 
     return LaunchDescription([

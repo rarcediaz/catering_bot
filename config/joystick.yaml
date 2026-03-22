@@ -8,9 +8,8 @@ teleop_node:
   ros__parameters:
 
     # Information for TwistStamped header
-    publish_stamped_twist: true
-    frame: 'base_link'
-    
+    publish_stamped_twist: false
+
     # Axis mappings
     axis_linear:  # Left thumb stick vertical
       x: 1
@@ -28,5 +27,5 @@ teleop_node:
 
     # Button Mappings
     require_enable_button: true
-    enable_button: 6  # Left shoulder button
-    enable_turbo_button: 7  # Right shoulder button
+    enable_button: 4  # Left shoulder button
+    enable_turbo_button: 5  # Right shoulder button

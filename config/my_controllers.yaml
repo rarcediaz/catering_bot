@@ -16,4 +16,4 @@ diff_cont:
     right_wheel_names: ['right_wheel_joint']
     wheel_separation: 0.4064
     wheel_radius: 0.0762
-    use_stamped_vel: true
+    use_stamped_vel: false
