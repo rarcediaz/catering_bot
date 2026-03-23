@@ -64,6 +64,7 @@ int right_pwm = 0;
 #define CMD_BUFFER 32
 char cmd[CMD_BUFFER];
 uint8_t cmd_index = 0;
+bool last_char_was_newline = false;
 
 unsigned long last_loop = 0;
 
@@ -227,6 +228,9 @@ void processCommand(char *s) {
         setLeftMotor(0);
         setRightMotor(0);
       }
+      Serial.println("OK");
+    } else {
+      Serial.println("ERR");
     }
   } else if (s[0] == 'e') {
     long left_now = 0;
@@ -241,7 +245,19 @@ void processCommand(char *s) {
       Kp = p;
       Kd = d;
       Ki = i;
+      Serial.println("OK");
+    } else {
+      Serial.println("ERR");
     }
+  } else if (s[0] == 'r') {
+    noInterrupts();
+    left_ticks = 0;
+    right_ticks = 0;
+    interrupts();
+    last_left_ticks = 0;
+    last_right_ticks = 0;
+    resetPidState();
+    Serial.println("OK");
   } else if (s[0] == 'f') {
     // Optional fault query
     Serial.print("M1_fault=");
@@ -249,7 +265,9 @@ void processCommand(char *s) {
     Serial.print(" M2_fault=");
     Serial.println(digitalRead(M2EN) == LOW ? 1 : 0);
   } else if (s[0] == '\0') {
-    // Ignore empty line / heartbeat
+    Serial.println("OK");
+  } else {
+    Serial.println("ERR");
   }
 }
 
@@ -258,15 +276,18 @@ void handleSerial() {
     char c = (char)Serial.read();
 
     if (c == '\r' || c == '\n') {
-      if (cmd_index > 0) {
+      if (!last_char_was_newline || cmd_index > 0) {
         cmd[cmd_index] = '\0';
         processCommand(cmd);
         cmd_index = 0;
       }
+      last_char_was_newline = true;
     } else if (cmd_index < CMD_BUFFER - 1) {
+      last_char_was_newline = false;
       cmd[cmd_index++] = c;
     } else {
       // overflow protection: drop and reset the line
+      last_char_was_newline = false;
       cmd_index = 0;
     }
   }
