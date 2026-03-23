@@ -73,11 +73,7 @@ def generate_launch_description():
     diff_drive_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=[
-            "diff_cont",
-            '--controller-ros-args',
-            '-r', '/diff_cont/cmd_vel_unstamped:=/cmd_vel'
-        ],
+        arguments=["diff_cont"],
     )
 
     delayed_diff_drive_spawner = RegisterEventHandler(
@@ -111,7 +107,7 @@ def generate_launch_description():
         package='twist_mux',
         executable='twist_mux',
         output='screen',
-        remappings=[('/cmd_vel_out', '/cmd_vel')],
+        remappings=[('/cmd_vel_out', '/diff_cont/cmd_vel_unstamped')],
         parameters=[
             {'use_sim_time': False},
             twist_mux_config
