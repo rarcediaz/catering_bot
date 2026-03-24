@@ -15,8 +15,8 @@ ydlidar:
     reversion: true
     inverted: true
     auto_reconnect: true
-    angle_max: 90.0
-    angle_min: -90.0
+    angle_max: 75.0
+    angle_min: -75.0
     range_max: 12.0
     range_min: 0.1
     frequency: 7.0

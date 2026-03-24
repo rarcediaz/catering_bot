@@ -73,9 +73,9 @@ void leftEncoderISR() {
   bool a = digitalRead(LEFT_ENC_A);
   bool b = digitalRead(LEFT_ENC_B);
   if (a == b) {
-    left_ticks++;
-  } else {
     left_ticks--;
+  } else {
+    left_ticks++;
   }
 }
 
@@ -83,9 +83,9 @@ void rightEncoderISR() {
   bool a = digitalRead(RIGHT_ENC_A);
   bool b = digitalRead(RIGHT_ENC_B);
   if (a == b) {
-    right_ticks++;
-  } else {
     right_ticks--;
+  } else {
+    right_ticks++;
   }
 }
 
