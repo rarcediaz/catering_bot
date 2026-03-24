@@ -12,11 +12,11 @@ ydlidar:
     sample_rate: 5
     abnormal_check_count: 4
     fixed_resolution: true
-    reversion: false
-    inverted: false
+    reversion: true
+    inverted: true
     auto_reconnect: true
-    angle_max: 180.0
-    angle_min: -180.0
+    angle_max: 90.0
+    angle_min: -90.0
     range_max: 12.0
     range_min: 0.1
     frequency: 7.0
