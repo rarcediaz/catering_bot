@@ -33,8 +33,9 @@
 #define RIGHT_ENC_B 13
 
 #define ENCODER_CPR   6256L   // Keep synced with your ROS config / real decoding mode
-#define LOOP_INTERVAL 10UL    // ms
+#define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
 #define MAX_PWM       255
+#define TARGET_SCALE  (1000.0f / (float)LOOP_INTERVAL)
 
 // ---------------- PID constants ----------------
 float Kp = 0.5f;
@@ -220,8 +221,10 @@ void processCommand(char *s) {
     int r = 0;
     if (parseMotorCommand(s, l, r)) {
       // Keep this protocol compatible with your RPi side.
-      left_target = l * 20.0f;
-      right_target = r * 20.0f;
+      // diffdrive_arduino sends motor targets in encoder counts per control loop.
+      // Convert that to counts/sec to compare against measured encoder velocity.
+      left_target = l * TARGET_SCALE;
+      right_target = r * TARGET_SCALE;
 
       if (l == 0 && r == 0) {
         resetPidState();
