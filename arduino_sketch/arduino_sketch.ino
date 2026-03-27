@@ -127,12 +127,12 @@ void setLeftMotor(int speed) {
     digitalWrite(M1INB, LOW);
     analogWrite(M1PWM, 0);
   } else if (speed > 0) {
-    digitalWrite(M1INA, HIGH);
-    digitalWrite(M1INB, LOW);
-    analogWrite(M1PWM, speed);
-  } else {
     digitalWrite(M1INA, LOW);
     digitalWrite(M1INB, HIGH);
+    analogWrite(M1PWM, speed);
+  } else {
+    digitalWrite(M1INA, HIGH);
+    digitalWrite(M1INB, LOW);
     analogWrite(M1PWM, -speed);
   }
 }
