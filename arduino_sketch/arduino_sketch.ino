@@ -38,9 +38,9 @@
 #define TARGET_SCALE  (1000.0f / (float)LOOP_INTERVAL)
 
 // ---------------- PID constants ----------------
-float Kp = 0.5f;
-float Ki = 0.02f;
-float Kd = 0.1f;
+float Kp = 0.15f;
+float Ki = 0.0f;
+float Kd = 0.0f;
 
 // ---------------- Encoder state ----------------
 volatile long left_ticks = 0;
@@ -74,9 +74,9 @@ void leftEncoderISR() {
   bool a = digitalRead(LEFT_ENC_A);
   bool b = digitalRead(LEFT_ENC_B);
   if (a == b) {
-    left_ticks--;
-  } else {
     left_ticks++;
+  } else {
+    left_ticks--;
   }
 }
 
@@ -353,7 +353,7 @@ void loop() {
     float left_error = left_target - left_vel;
     left_integral += left_error * dt;
     float left_derivative = (left_error - left_prev_error) / dt;
-    left_pwm += (int)(Kp * left_error + Ki * left_integral + Kd * left_derivative);
+    left_pwm = (int)(Kp * left_error + Ki * left_integral + Kd * left_derivative);
     left_pwm = constrain(left_pwm, -MAX_PWM, MAX_PWM);
     left_prev_error = left_error;
 
@@ -361,7 +361,7 @@ void loop() {
     float right_error = right_target - right_vel;
     right_integral += right_error * dt;
     float right_derivative = (right_error - right_prev_error) / dt;
-    right_pwm += (int)(Kp * right_error + Ki * right_integral + Kd * right_derivative);
+    right_pwm = (int)(Kp * right_error + Ki * right_integral + Kd * right_derivative);
     right_pwm = constrain(right_pwm, -MAX_PWM, MAX_PWM);
     right_prev_error = right_error;
 
