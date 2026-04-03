@@ -16,6 +16,7 @@ def generate_launch_description():
 
     package_name = 'my_bot'
     use_joystick = LaunchConfiguration('use_joystick')
+    use_battery_monitor = LaunchConfiguration('use_battery_monitor')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -40,6 +41,17 @@ def generate_launch_description():
                     get_package_share_directory(package_name),'launch','joystick.launch.py'
                 )]),
                 condition=IfCondition(use_joystick)
+    )
+
+    battery_monitor = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory(package_name),
+                'launch',
+                'safety.launch.py'
+            )
+        ),
+        condition=IfCondition(use_battery_monitor)
     )
 
 
@@ -124,8 +136,14 @@ def generate_launch_description():
             default_value='true',
             description='Launch local joystick teleop on this machine if true.'
         ),
+        DeclareLaunchArgument(
+            'use_battery_monitor',
+            default_value='true',
+            description='Launch the battery and safety monitoring node if true.'
+        ),
         rsp,
         joystick,
+        battery_monitor,
         ydlidar,
         delayed_controller_manager,
         delayed_diff_drive_spawner,

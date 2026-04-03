@@ -37,4 +37,11 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  PROGRAMS
+    scripts/xbox_controller.py
+    scripts/safety_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
