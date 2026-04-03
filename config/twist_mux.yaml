@@ -1,6 +1,10 @@
 twist_mux:
   ros__parameters:
     topics:
+      safety:
+        topic: /cmd_vel_safety
+        timeout: 0.2
+        priority: 255
       joystick:
         topic: /cmd_vel_joy
         timeout: 0.5
