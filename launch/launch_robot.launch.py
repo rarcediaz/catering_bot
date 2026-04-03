@@ -17,6 +17,8 @@ def generate_launch_description():
     package_name = 'my_bot'
     use_joystick = LaunchConfiguration('use_joystick')
     use_battery_monitor = LaunchConfiguration('use_battery_monitor')
+    obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
+    front_stop_half_angle_deg = LaunchConfiguration('front_stop_half_angle_deg')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -51,6 +53,10 @@ def generate_launch_description():
                 'safety.launch.py'
             )
         ),
+        launch_arguments={
+            'obstacle_stop_distance_m': obstacle_stop_distance_m,
+            'front_stop_half_angle_deg': front_stop_half_angle_deg,
+        }.items(),
         condition=IfCondition(use_battery_monitor)
     )
 
@@ -140,6 +146,16 @@ def generate_launch_description():
             'use_battery_monitor',
             default_value='true',
             description='Launch the battery and safety monitoring node if true.'
+        ),
+        DeclareLaunchArgument(
+            'obstacle_stop_distance_m',
+            default_value='0.10',
+            description='Stop if an obstacle is within this front distance in meters.'
+        ),
+        DeclareLaunchArgument(
+            'front_stop_half_angle_deg',
+            default_value='15.0',
+            description='Half-angle of the front obstacle stop cone in degrees.'
         ),
         rsp,
         joystick,

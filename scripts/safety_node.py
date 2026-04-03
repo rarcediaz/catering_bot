@@ -3,7 +3,9 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Float64MultiArray, String
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
 import time
+import math
 import board
 from adafruit_ads1x15.ads1115 import ADS1115
 from adafruit_ads1x15.analog_in import AnalogIn
@@ -30,10 +32,20 @@ class IntegrityNode(Node):
         # --- STATE & SAFETY ---
         self.current_mode = "STOP"
         self.safety_lock = False
+        self.front_obstacle_active = False
         self.latency_fail_count = 0
         self.history = []
         self.MAX_SAMPLES = 20
         self.SAFETY_PUBLISH_HZ = 10.0
+
+        self.declare_parameter('obstacle_stop_enabled', True)
+        self.declare_parameter('obstacle_stop_distance_m', 0.10)
+        self.declare_parameter('front_stop_half_angle_deg', 15.0)
+
+        self.obstacle_stop_enabled = bool(self.get_parameter('obstacle_stop_enabled').value)
+        self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
+        self.front_stop_half_angle_deg = float(self.get_parameter('front_stop_half_angle_deg').value)
+        self.front_stop_half_angle_rad = math.radians(self.front_stop_half_angle_deg)
 
         # --- ADC HARDWARE SETUP ---
         try:
@@ -55,6 +67,7 @@ class IntegrityNode(Node):
 
         self.create_subscription(Float64MultiArray, '/ping_t1', self.sync_callback, 10)
         self.create_subscription(String, '/ui/set_mode', self.handle_mode_change, 10)
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
 
         self.create_timer(1.0, self.publish_battery)
         self.create_timer(1.0, self.broadcast_status)
@@ -96,8 +109,39 @@ class IntegrityNode(Node):
         self.safety_cmd_pub.publish(Twist())
 
     def publish_safety_hold(self):
-        if self.safety_lock:
+        if self.safety_lock or self.front_obstacle_active:
             self.publish_zero_twist()
+
+    def scan_callback(self, msg):
+        if not self.obstacle_stop_enabled:
+            return
+
+        closest_front_range = math.inf
+
+        for index, distance in enumerate(msg.ranges):
+            angle = msg.angle_min + (index * msg.angle_increment)
+
+            if abs(angle) > self.front_stop_half_angle_rad:
+                continue
+            if not math.isfinite(distance):
+                continue
+            if distance < msg.range_min or distance > msg.range_max:
+                continue
+
+            closest_front_range = min(closest_front_range, distance)
+
+        obstacle_detected = closest_front_range <= self.obstacle_stop_distance_m
+
+        if obstacle_detected and not self.front_obstacle_active:
+            self.send_log(
+                f"Front obstacle stop active ({closest_front_range:.2f}m <= {self.obstacle_stop_distance_m:.2f}m)",
+                is_crit=True
+            )
+            self.publish_zero_twist()
+        elif self.front_obstacle_active and not obstacle_detected:
+            self.send_log("Front obstacle cleared.")
+
+        self.front_obstacle_active = obstacle_detected
 
     def sync_callback(self, msg):
         t2 = time.time()
