@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32, Float64MultiArray, String
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
@@ -67,7 +68,7 @@ class IntegrityNode(Node):
 
         self.create_subscription(Float64MultiArray, '/ping_t1', self.sync_callback, 10)
         self.create_subscription(String, '/ui/set_mode', self.handle_mode_change, 10)
-        self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
 
         self.create_timer(1.0, self.publish_battery)
         self.create_timer(1.0, self.broadcast_status)
