@@ -40,7 +40,7 @@ class IntegrityNode(Node):
         self.SAFETY_PUBLISH_HZ = 10.0
 
         self.declare_parameter('obstacle_stop_enabled', True)
-        self.declare_parameter('obstacle_stop_distance_m', 0.10)
+        self.declare_parameter('obstacle_stop_distance_m', 0.25)
         self.declare_parameter('front_stop_half_angle_deg', 15.0)
 
         self.obstacle_stop_enabled = bool(self.get_parameter('obstacle_stop_enabled').value)
