@@ -13,7 +13,7 @@ class XboxMover(Node):
         super().__init__('xbox_teleop_node')
 
         # 1. Initialize Mode (Default to STOP for safety)
-        self.current_mode = "STOP"
+        self.current_mode = "MANUAL"
 
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel_joy', 10)
 

@@ -18,8 +18,8 @@ class IntegrityNode(Node):
         
         # --- CONFIGURATION ---
         self.DIVIDER_RATIO = 8.2727 
-        self.CRITICAL_LATENCY_MS = 250.0
-        self.CRITICAL_VOLTAGE = 0 # Updated to match your 0% threshold
+        self.CRITICAL_LATENCY_MS = 2500.0
+        self.CRITICAL_VOLTAGE = -1 # Updated to match your 0% threshold
         
         # --- BATTERY S-CURVE LUT ---
         self.BATTERY_LUT = [
