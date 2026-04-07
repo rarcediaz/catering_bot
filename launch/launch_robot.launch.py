@@ -143,7 +143,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_joystick',
-            default_value='true',
+            default_value='false',
             description='Launch local joystick teleop on this machine if true.'
         ),
         DeclareLaunchArgument(
@@ -158,7 +158,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'obstacle_slow_distance_m',
-            default_value='0.60',
+            default_value='1.5',
             description='Begin reducing forward speed within this distance in meters.'
         ),
         DeclareLaunchArgument(
