@@ -1,0 +1,14 @@
+scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: self_box_filter
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: chassis
+        min_x: 0.0
+        max_x: 1.0668
+        min_y: -0.3048
+        max_y: 0.3048
+        min_z: -0.05
+        max_z: 0.15
+        invert: false

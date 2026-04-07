@@ -129,6 +129,24 @@ def generate_launch_description():
         'twist_mux.yaml'
     )
 
+    scan_filter_config = os.path.join(
+        get_package_share_directory(package_name),
+        'config',
+        'scan_filter.yaml'
+    )
+
+    scan_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='scan_filter_chain',
+        output='screen',
+        parameters=[scan_filter_config],
+        remappings=[
+            ('scan', '/scan'),
+            ('scan_filtered', '/scan_filtered'),
+        ]
+    )
+
     twist_mux = Node(
         package='twist_mux',
         executable='twist_mux',
@@ -175,6 +193,7 @@ def generate_launch_description():
         joystick,
         battery_monitor,
         ydlidar,
+        scan_filter,
         delayed_controller_manager,
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner,

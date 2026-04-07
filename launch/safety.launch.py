@@ -9,6 +9,7 @@ def generate_launch_description():
     obstacle_slow_distance_m = LaunchConfiguration('obstacle_slow_distance_m')
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
+    scan_topic = LaunchConfiguration('scan_topic')
 
     safety_node = Node(
         package='my_bot',
@@ -21,6 +22,9 @@ def generate_launch_description():
             'front_stop_start_x_m': front_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
         }],
+        remappings=[
+            ('/scan', scan_topic),
+        ],
     )
 
     return LaunchDescription([
@@ -31,7 +35,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'obstacle_slow_distance_m',
-            default_value='0.60',
+            default_value='1.5',
             description='Begin reducing forward speed within this distance in meters.'
         ),
         DeclareLaunchArgument(
@@ -43,6 +47,11 @@ def generate_launch_description():
             'front_stop_width_m',
             default_value='0.8596',
             description='Width of the forward stop corridor in meters.'
+        ),
+        DeclareLaunchArgument(
+            'scan_topic',
+            default_value='/scan_filtered',
+            description='LaserScan topic consumed by the safety node.'
         ),
         safety_node,
     ])
