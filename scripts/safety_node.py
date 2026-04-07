@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import Float32, Float64MultiArray, String
+from std_msgs.msg import Bool, Float32, Float64MultiArray, String
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 import time
@@ -19,7 +19,7 @@ class IntegrityNode(Node):
         # --- CONFIGURATION ---
         self.DIVIDER_RATIO = 8.2727 
         self.CRITICAL_LATENCY_MS = 250.0
-        self.CRITICAL_VOLTAGE = 21.0 # Updated to match your 0% threshold
+        self.CRITICAL_VOLTAGE = 0 # Updated to match your 0% threshold
         
         # --- BATTERY S-CURVE LUT ---
         self.BATTERY_LUT = [
@@ -40,13 +40,29 @@ class IntegrityNode(Node):
         self.SAFETY_PUBLISH_HZ = 10.0
 
         self.declare_parameter('obstacle_stop_enabled', True)
-        self.declare_parameter('obstacle_stop_distance_m', 0.25)
-        self.declare_parameter('front_stop_half_angle_deg', 15.0)
+        self.declare_parameter('obstacle_stop_distance_m', 0.20)
+        self.declare_parameter('obstacle_slow_distance_m', 0.60)
+        self.declare_parameter('front_stop_start_x_m', 0.0508)
+        self.declare_parameter('front_stop_width_m', 0.8596)
+        self.declare_parameter('joystick_timeout_sec', 0.5)
+        self.declare_parameter('nav_timeout_sec', 0.5)
 
         self.obstacle_stop_enabled = bool(self.get_parameter('obstacle_stop_enabled').value)
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
-        self.front_stop_half_angle_deg = float(self.get_parameter('front_stop_half_angle_deg').value)
-        self.front_stop_half_angle_rad = math.radians(self.front_stop_half_angle_deg)
+        self.obstacle_slow_distance_m = float(self.get_parameter('obstacle_slow_distance_m').value)
+        self.front_stop_start_x_m = float(self.get_parameter('front_stop_start_x_m').value)
+        self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
+        self.front_stop_half_width_m = 0.5 * self.front_stop_width_m
+        self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
+        self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
+
+        self.closest_forward_clearance = math.inf
+        self.front_speed_limit_active = False
+        self.speed_limit_scale = 1.0
+        self.latest_joy_cmd = Twist()
+        self.latest_nav_cmd = Twist()
+        self.latest_joy_time = None
+        self.latest_nav_time = None
 
         # --- ADC HARDWARE SETUP ---
         try:
@@ -62,6 +78,9 @@ class IntegrityNode(Node):
         # --- ROS2 COMMS ---
         self.lat_pub = self.create_publisher(Float32, '/robot_health/latency_ms', 10)
         self.batt_pub = self.create_publisher(Float32, '/robot_health/battery', 10)
+        self.front_range_pub = self.create_publisher(Float32, '/robot_health/closest_front_range_m', 10)
+        self.front_obstacle_pub = self.create_publisher(Bool, '/robot_health/front_obstacle_active', 10)
+        self.speed_limit_scale_pub = self.create_publisher(Float32, '/robot_health/front_speed_limit_scale', 10)
         self.mode_pub = self.create_publisher(String, '/robot_state/mode', 10)
         self.log_pub = self.create_publisher(String, '/robot_health/log', 10)
         self.safety_cmd_pub = self.create_publisher(Twist, '/cmd_vel_safety', 10)
@@ -69,6 +88,8 @@ class IntegrityNode(Node):
         self.create_subscription(Float64MultiArray, '/ping_t1', self.sync_callback, 10)
         self.create_subscription(String, '/ui/set_mode', self.handle_mode_change, 10)
         self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+        self.create_subscription(Twist, '/cmd_vel_joy', self.joy_cmd_callback, 10)
+        self.create_subscription(Twist, '/cmd_vel_nav', self.nav_cmd_callback, 10)
 
         self.create_timer(1.0, self.publish_battery)
         self.create_timer(1.0, self.broadcast_status)
@@ -110,35 +131,106 @@ class IntegrityNode(Node):
         self.safety_cmd_pub.publish(Twist())
 
     def publish_safety_hold(self):
-        if self.safety_lock or self.front_obstacle_active:
+        if self.safety_lock:
             self.publish_zero_twist()
+            self.speed_limit_scale_pub.publish(Float32(data=0.0))
+            return
+
+        active_cmd = self.get_active_command()
+        if active_cmd is None:
+            self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+            return
+
+        if self.front_obstacle_active:
+            self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, 0.0))
+        elif self.front_speed_limit_active:
+            self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, self.speed_limit_scale))
+
+        self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+
+    def joy_cmd_callback(self, msg):
+        self.latest_joy_cmd = msg
+        self.latest_joy_time = time.monotonic()
+
+    def nav_cmd_callback(self, msg):
+        self.latest_nav_cmd = msg
+        self.latest_nav_time = time.monotonic()
+
+    def get_active_command(self):
+        now = time.monotonic()
+        if self.latest_joy_time is not None and (now - self.latest_joy_time) <= self.joystick_timeout_sec:
+            return self.latest_joy_cmd
+        if self.latest_nav_time is not None and (now - self.latest_nav_time) <= self.nav_timeout_sec:
+            return self.latest_nav_cmd
+        return None
+
+    def limit_forward_motion(self, cmd, scale):
+        limited = Twist()
+        limited.linear.x = cmd.linear.x
+        limited.linear.y = cmd.linear.y
+        limited.linear.z = cmd.linear.z
+        limited.angular.x = cmd.angular.x
+        limited.angular.y = cmd.angular.y
+        limited.angular.z = cmd.angular.z
+
+        if limited.linear.x > 0.0:
+            limited.linear.x *= scale
+
+        return limited
 
     def scan_callback(self, msg):
         if not self.obstacle_stop_enabled:
             return
 
-        closest_front_range = math.inf
+        closest_forward_clearance = math.inf
 
         for index, distance in enumerate(msg.ranges):
             angle = msg.angle_min + (index * msg.angle_increment)
 
-            if abs(angle) > self.front_stop_half_angle_rad:
-                continue
             if not math.isfinite(distance):
                 continue
             if distance < msg.range_min or distance > msg.range_max:
                 continue
 
-            closest_front_range = min(closest_front_range, distance)
+            point_x = distance * math.cos(angle)
+            point_y = distance * math.sin(angle)
 
-        obstacle_detected = closest_front_range <= self.obstacle_stop_distance_m
+            if point_x < self.front_stop_start_x_m:
+                continue
+            if abs(point_y) > self.front_stop_half_width_m:
+                continue
+
+            forward_clearance = point_x - self.front_stop_start_x_m
+            closest_forward_clearance = min(closest_forward_clearance, forward_clearance)
+
+        previous_speed_limit_active = self.front_speed_limit_active
+        self.closest_forward_clearance = closest_forward_clearance
+        obstacle_detected = closest_forward_clearance <= self.obstacle_stop_distance_m
+        speed_limit_active = closest_forward_clearance <= self.obstacle_slow_distance_m
+        if obstacle_detected:
+            speed_limit_scale = 0.0
+        elif speed_limit_active:
+            span = max(self.obstacle_slow_distance_m - self.obstacle_stop_distance_m, 1e-3)
+            speed_limit_scale = (closest_forward_clearance - self.obstacle_stop_distance_m) / span
+            speed_limit_scale = max(0.0, min(1.0, speed_limit_scale))
+        else:
+            speed_limit_scale = 1.0
+        reported_range = closest_forward_clearance if math.isfinite(closest_forward_clearance) else -1.0
+
+        self.front_range_pub.publish(Float32(data=float(reported_range)))
+        self.front_obstacle_pub.publish(Bool(data=obstacle_detected))
+        self.speed_limit_scale = speed_limit_scale
+        self.front_speed_limit_active = speed_limit_active
 
         if obstacle_detected and not self.front_obstacle_active:
             self.send_log(
-                f"Front obstacle stop active ({closest_front_range:.2f}m <= {self.obstacle_stop_distance_m:.2f}m)",
+                f"Front obstacle stop active ({closest_forward_clearance:.2f}m <= {self.obstacle_stop_distance_m:.2f}m)",
                 is_crit=True
             )
-            self.publish_zero_twist()
+        elif speed_limit_active and not previous_speed_limit_active:
+            self.send_log(
+                f"Front speed limiting active ({closest_forward_clearance:.2f}m <= {self.obstacle_slow_distance_m:.2f}m)"
+            )
         elif self.front_obstacle_active and not obstacle_detected:
             self.send_log("Front obstacle cleared.")
 
