@@ -80,14 +80,10 @@ class XboxMover(Node):
 
         msg = Twist()
 
-        # 3. MANUAL LOGIC CHECK
-        # If the mode is not MANUAL, we force the motors to 0 and skip joystick processing.
+        # Only publish joystick commands while MANUAL is the active mode.
         if self.current_mode != "MANUAL":
             self.current_linear = 0.0
             self.current_angular = 0.0
-            msg.linear.x = 0.0
-            msg.angular.z = 0.0
-            self.publisher_.publish(msg)
             return
 
         # --- Everything below only runs if mode is MANUAL ---

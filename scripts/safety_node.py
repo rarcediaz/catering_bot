@@ -158,9 +158,17 @@ class IntegrityNode(Node):
 
     def get_active_command(self):
         now = time.monotonic()
-        if self.latest_joy_time is not None and (now - self.latest_joy_time) <= self.joystick_timeout_sec:
+        joy_active = self.latest_joy_time is not None and (now - self.latest_joy_time) <= self.joystick_timeout_sec
+        nav_active = self.latest_nav_time is not None and (now - self.latest_nav_time) <= self.nav_timeout_sec
+
+        if self.current_mode == "MANUAL":
+            return self.latest_joy_cmd if joy_active else None
+        if self.current_mode == "AUTO":
+            return self.latest_nav_cmd if nav_active else None
+
+        if joy_active:
             return self.latest_joy_cmd
-        if self.latest_nav_time is not None and (now - self.latest_nav_time) <= self.nav_timeout_sec:
+        if nav_active:
             return self.latest_nav_cmd
         return None
 
