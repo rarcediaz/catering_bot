@@ -5,10 +5,22 @@ scan_filter_chain:
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: chassis
-        min_x: -0.02
-        max_x: 1.10
-        min_y: -0.33
-        max_y: 0.33
+        min_x: -0.08
+        max_x: 1.12
+        min_y: -0.34
+        max_y: 0.36
         min_z: -0.08
         max_z: 0.20
+        invert: false
+    filter2:
+      name: rear_left_corner_filter
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: chassis
+        min_x: -0.12
+        max_x: 0.18
+        min_y: 0.18
+        max_y: 0.40
+        min_z: -0.08
+        max_z: 0.25
         invert: false
