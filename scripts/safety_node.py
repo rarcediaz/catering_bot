@@ -7,10 +7,19 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 import time
 import math
-import board
-from adafruit_ads1x15.ads1115 import ADS1115
-from adafruit_ads1x15.analog_in import AnalogIn
-import adafruit_ads1x15.ads1x15 as ads1x15
+
+try:
+    import board
+    from adafruit_ads1x15.ads1115 import ADS1115
+    from adafruit_ads1x15.analog_in import AnalogIn
+    import adafruit_ads1x15.ads1x15 as ads1x15
+    ADC_IMPORT_ERROR = None
+except Exception as exc:
+    board = None
+    ADS1115 = None
+    AnalogIn = None
+    ads1x15 = None
+    ADC_IMPORT_ERROR = exc
 
 class IntegrityNode(Node):
     def __init__(self):
@@ -66,6 +75,8 @@ class IntegrityNode(Node):
 
         # --- ADC HARDWARE SETUP ---
         try:
+            if ADC_IMPORT_ERROR is not None:
+                raise RuntimeError(f"ADC Python dependencies unavailable: {ADC_IMPORT_ERROR}")
             i2c = board.I2C()
             self.ads = ADS1115(i2c, address=0x48)
             self.chan = AnalogIn(self.ads, ads1x15.Pin.A0)
@@ -138,6 +149,10 @@ class IntegrityNode(Node):
 
         active_cmd = self.get_active_command()
         if active_cmd is None:
+            if self.front_obstacle_active:
+                self.publish_zero_twist()
+                self.speed_limit_scale_pub.publish(Float32(data=0.0))
+                return
             self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
             return
 
@@ -245,6 +260,10 @@ class IntegrityNode(Node):
         self.front_obstacle_active = obstacle_detected
 
     def sync_callback(self, msg):
+        if not msg.data:
+            self.send_log("Received empty /ping_t1 sample; ignoring.", is_crit=True)
+            return
+
         t2 = time.time()
         t1 = msg.data[0]
         raw_diff = t2 - t1
@@ -289,10 +308,19 @@ class IntegrityNode(Node):
 
         self.batt_pub.publish(Float32(data=float(percent)))
 
+    def destroy_node(self):
+        super().destroy_node()
+
 def main():
     rclpy.init()
-    rclpy.spin(IntegrityNode())
-    rclpy.shutdown()
+    node = IntegrityNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

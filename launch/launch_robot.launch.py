@@ -17,6 +17,9 @@ def generate_launch_description():
     package_name = 'my_bot'
     use_joystick = LaunchConfiguration('use_joystick')
     use_battery_monitor = LaunchConfiguration('use_battery_monitor')
+    use_stop_debug_monitor = LaunchConfiguration('use_stop_debug_monitor')
+    stop_debug_log_path = LaunchConfiguration('stop_debug_log_path')
+    stop_debug_log_hz = LaunchConfiguration('stop_debug_log_hz')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_slow_distance_m = LaunchConfiguration('obstacle_slow_distance_m')
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
@@ -62,6 +65,21 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
         }.items(),
         condition=IfCondition(use_battery_monitor)
+    )
+
+    stop_debug_monitor = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory(package_name),
+                'launch',
+                'stop_debug.launch.py'
+            )
+        ),
+        launch_arguments={
+            'log_path': stop_debug_log_path,
+            'log_hz': stop_debug_log_hz,
+        }.items(),
+        condition=IfCondition(use_stop_debug_monitor)
     )
 
 
@@ -170,6 +188,21 @@ def generate_launch_description():
             description='Launch the battery and safety monitoring node if true.'
         ),
         DeclareLaunchArgument(
+            'use_stop_debug_monitor',
+            default_value='false',
+            description='Launch the stop debug monitor if true.'
+        ),
+        DeclareLaunchArgument(
+            'stop_debug_log_path',
+            default_value='~/stop_debug_log.csv',
+            description='CSV file path for the stop debug monitor.'
+        ),
+        DeclareLaunchArgument(
+            'stop_debug_log_hz',
+            default_value='5.0',
+            description='Stop debug logging frequency in Hz.'
+        ),
+        DeclareLaunchArgument(
             'obstacle_stop_distance_m',
             default_value='0.20',
             description='Stop if an obstacle is within this forward distance in meters.'
@@ -192,6 +225,7 @@ def generate_launch_description():
         rsp,
         joystick,
         battery_monitor,
+        stop_debug_monitor,
         ydlidar,
         scan_filter,
         delayed_controller_manager,
