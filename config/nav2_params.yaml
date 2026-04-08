@@ -136,28 +136,28 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.10
+      yaw_goal_tolerance: 0.15
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.12
+      max_vel_x: 0.06
       max_vel_y: 0.0
-      max_vel_theta: 0.25
-      min_speed_xy: 0.03
-      max_speed_xy: 0.12
+      max_vel_theta: 0.20
+      min_speed_xy: 0.02
+      max_speed_xy: 0.06
       min_speed_theta: 0.0
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.2
+      acc_lim_x: 0.10
       acc_lim_y: 0.0
-      acc_lim_theta: 0.4
-      decel_lim_x: -0.2
+      acc_lim_theta: 0.25
+      decel_lim_x: -0.10
       decel_lim_y: 0.0
-      decel_lim_theta: -0.4
+      decel_lim_theta: -0.25
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 20
@@ -166,7 +166,7 @@ controller_server:
       angular_granularity: 0.025
       transform_tolerance: 0.2
       xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.02
+      trans_stopped_velocity: 0.01
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
@@ -320,9 +320,9 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: false
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.25
+    max_rotational_vel: 0.20
     min_rotational_vel: 0.05
-    rotational_acc_lim: 0.4
+    rotational_acc_lim: 0.25
 
 robot_state_publisher:
   ros__parameters:
@@ -346,10 +346,10 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.12, 0.0, 0.25]
-    min_velocity: [-0.12, 0.0, -0.25]
-    max_accel: [0.2, 0.0, 0.4]
-    max_decel: [-0.2, 0.0, -0.4]
+    max_velocity: [0.06, 0.0, 0.20]
+    min_velocity: [-0.06, 0.0, -0.20]
+    max_accel: [0.10, 0.0, 0.25]
+    max_decel: [-0.10, 0.0, -0.25]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
