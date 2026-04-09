@@ -3,7 +3,7 @@ import os
 from ament_index_python.packages import get_package_prefix
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, SetEnvironmentVariable
 
 
 def generate_launch_description():
@@ -21,5 +21,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
         xbox_controller,
     ])

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rclpy
+from action_msgs.srv import CancelGoal
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Bool, Float32, Float64MultiArray, String
@@ -46,7 +47,7 @@ class IntegrityNode(Node):
         self.latency_fail_count = 0
         self.history = []
         self.MAX_SAMPLES = 20
-        self.SAFETY_PUBLISH_HZ = 10.0
+        self.SAFETY_PUBLISH_HZ = 20.0
 
         self.declare_parameter('obstacle_stop_enabled', True)
         self.declare_parameter('obstacle_stop_distance_m', 0.20)
@@ -94,13 +95,23 @@ class IntegrityNode(Node):
         self.speed_limit_scale_pub = self.create_publisher(Float32, '/robot_health/front_speed_limit_scale', 10)
         self.mode_pub = self.create_publisher(String, '/robot_state/mode', 10)
         self.log_pub = self.create_publisher(String, '/robot_health/log', 10)
+        self.nav_gate_pub = self.create_publisher(Twist, '/cmd_vel_nav', 10)
         self.safety_cmd_pub = self.create_publisher(Twist, '/cmd_vel_safety', 10)
 
         self.create_subscription(Float64MultiArray, '/ping_t1', self.sync_callback, 10)
         self.create_subscription(String, '/ui/set_mode', self.handle_mode_change, 10)
         self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
         self.create_subscription(Twist, '/cmd_vel_joy', self.joy_cmd_callback, 10)
-        self.create_subscription(Twist, '/cmd_vel_nav', self.nav_cmd_callback, 10)
+        self.create_subscription(Twist, '/cmd_vel_nav_raw', self.nav_cmd_callback, 10)
+
+        self.navigate_to_pose_cancel_client = self.create_client(
+            CancelGoal,
+            '/navigate_to_pose/_action/cancel_goal'
+        )
+        self.navigate_through_poses_cancel_client = self.create_client(
+            CancelGoal,
+            '/navigate_through_poses/_action/cancel_goal'
+        )
 
         self.create_timer(1.0, self.publish_battery)
         self.create_timer(1.0, self.broadcast_status)
@@ -116,6 +127,9 @@ class IntegrityNode(Node):
         if cmd == "RESET":
             self.safety_lock = False
             self.current_mode = "STOP"
+            self.clear_cached_commands()
+            self.nav_gate_pub.publish(Twist())
+            self.publish_zero_twist()
             self.send_log("SAFETY LOCK DEACTIVATED. Ready for Mode Change.")
             return
 
@@ -123,6 +137,8 @@ class IntegrityNode(Node):
             self.trigger_stop("UI Emergency Stop")
         elif not self.safety_lock:
             self.current_mode = cmd
+            if cmd != "AUTO":
+                self.nav_gate_pub.publish(Twist())
             self.send_log(f"Mode changed to: {cmd}")
         else:
             self.send_log("LOCK ACTIVE: Click 'DEACTIVATE STOP' first", is_crit=True)
@@ -130,7 +146,10 @@ class IntegrityNode(Node):
     def trigger_stop(self, reason):
         self.current_mode = "STOP"
         self.safety_lock = True
+        self.clear_cached_commands()
         self.send_log(f"EMERGENCY STOP: {reason}", is_crit=True)
+        self.cancel_navigation_goals()
+        self.nav_gate_pub.publish(Twist())
         self.publish_zero_twist()
 
     def send_log(self, text, is_crit=False):
@@ -141,7 +160,45 @@ class IntegrityNode(Node):
     def publish_zero_twist(self):
         self.safety_cmd_pub.publish(Twist())
 
+    def clear_cached_commands(self):
+        self.latest_joy_cmd = Twist()
+        self.latest_nav_cmd = Twist()
+        self.latest_joy_time = None
+        self.latest_nav_time = None
+
+    def cancel_navigation_goals(self):
+        request = CancelGoal.Request()
+        request.goal_info.goal_id.uuid = [0] * 16
+        request.goal_info.stamp.sec = 0
+        request.goal_info.stamp.nanosec = 0
+
+        for name, client in (
+            ('navigate_to_pose', self.navigate_to_pose_cancel_client),
+            ('navigate_through_poses', self.navigate_through_poses_cancel_client),
+        ):
+            if not client.wait_for_service(timeout_sec=0.1):
+                continue
+
+            future = client.call_async(request)
+            future.add_done_callback(
+                lambda future, action_name=name: self._handle_cancel_response(action_name, future)
+            )
+
+    def _handle_cancel_response(self, action_name, future):
+        try:
+            response = future.result()
+            self.send_log(
+                f"Canceled {action_name} goals ({len(response.goals_canceling)} active goals matched)."
+            )
+        except Exception as exc:
+            self.send_log(f"Failed to cancel {action_name} goals: {exc}", is_crit=True)
+
     def publish_safety_hold(self):
+        if self.current_mode == "STOP":
+            self.publish_zero_twist()
+            self.speed_limit_scale_pub.publish(Float32(data=0.0))
+            return
+
         if self.safety_lock:
             self.publish_zero_twist()
             self.speed_limit_scale_pub.publish(Float32(data=0.0))
@@ -157,7 +214,10 @@ class IntegrityNode(Node):
             return
 
         if self.front_obstacle_active:
-            self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, 0.0))
+            if self.current_mode == "MANUAL":
+                self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, 0.0))
+            else:
+                self.publish_zero_twist()
         elif self.front_speed_limit_active:
             self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, self.speed_limit_scale))
 
@@ -170,6 +230,15 @@ class IntegrityNode(Node):
     def nav_cmd_callback(self, msg):
         self.latest_nav_cmd = msg
         self.latest_nav_time = time.monotonic()
+        if self.current_mode == "AUTO" and not self.safety_lock:
+            if self.front_obstacle_active:
+                self.nav_gate_pub.publish(Twist())
+            elif self.front_speed_limit_active:
+                self.nav_gate_pub.publish(self.limit_forward_motion(msg, self.speed_limit_scale))
+            else:
+                self.nav_gate_pub.publish(msg)
+        else:
+            self.nav_gate_pub.publish(Twist())
 
     def get_active_command(self):
         now = time.monotonic()
@@ -180,11 +249,6 @@ class IntegrityNode(Node):
             return self.latest_joy_cmd if joy_active else None
         if self.current_mode == "AUTO":
             return self.latest_nav_cmd if nav_active else None
-
-        if joy_active:
-            return self.latest_joy_cmd
-        if nav_active:
-            return self.latest_nav_cmd
         return None
 
     def limit_forward_motion(self, cmd, scale):
@@ -244,6 +308,13 @@ class IntegrityNode(Node):
         self.front_obstacle_pub.publish(Bool(data=obstacle_detected))
         self.speed_limit_scale = speed_limit_scale
         self.front_speed_limit_active = speed_limit_active
+
+        if self.current_mode == "AUTO" and not self.safety_lock:
+            if obstacle_detected:
+                self.nav_gate_pub.publish(Twist())
+                self.publish_zero_twist()
+            elif speed_limit_active:
+                self.nav_gate_pub.publish(self.limit_forward_motion(self.latest_nav_cmd, self.speed_limit_scale))
 
         if obstacle_detected and not self.front_obstacle_active:
             self.send_log(

@@ -2,7 +2,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import SetRemap
@@ -19,8 +19,8 @@ def generate_launch_description():
     )
 
     nav2 = GroupAction([
-        SetRemap(src='cmd_vel_smoothed', dst='cmd_vel_nav'),
-        SetRemap(src='smoothed_cmd_vel', dst='cmd_vel_nav'),
+        SetRemap(src='cmd_vel_smoothed', dst='cmd_vel_nav_raw'),
+        SetRemap(src='smoothed_cmd_vel', dst='cmd_vel_nav_raw'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(
@@ -39,6 +39,7 @@ def generate_launch_description():
     ])
 
     return LaunchDescription([
+        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',

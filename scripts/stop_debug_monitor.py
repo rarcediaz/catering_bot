@@ -28,6 +28,7 @@ class StopDebugMonitor(Node):
         self.front_speed_limit_scale = math.nan
 
         self.cmd_vel_nav = Twist()
+        self.cmd_vel_nav_raw = Twist()
         self.cmd_vel_safety = Twist()
         self.cmd_vel_mux = Twist()
         self.odom = Odometry()
@@ -39,6 +40,7 @@ class StopDebugMonitor(Node):
         self.create_subscription(Float32, '/robot_health/closest_front_range_m', self.front_range_callback, 10)
         self.create_subscription(Float32, '/robot_health/front_speed_limit_scale', self.front_speed_limit_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_nav', self.cmd_vel_nav_callback, 10)
+        self.create_subscription(Twist, '/cmd_vel_nav_raw', self.cmd_vel_nav_raw_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_safety', self.cmd_vel_safety_callback, 10)
         self.create_subscription(Twist, '/diff_cont/cmd_vel_unstamped', self.cmd_vel_mux_callback, 10)
         self.create_subscription(Odometry, '/diff_cont/odom', self.odom_callback, 10)
@@ -53,6 +55,8 @@ class StopDebugMonitor(Node):
                 'front_obstacle_active',
                 'closest_front_range_m',
                 'front_speed_limit_scale',
+                'cmd_vel_nav_raw_linear_x',
+                'cmd_vel_nav_raw_angular_z',
                 'cmd_vel_nav_linear_x',
                 'cmd_vel_nav_angular_z',
                 'cmd_vel_safety_linear_x',
@@ -82,6 +86,9 @@ class StopDebugMonitor(Node):
     def cmd_vel_nav_callback(self, msg: Twist):
         self.cmd_vel_nav = msg
 
+    def cmd_vel_nav_raw_callback(self, msg: Twist):
+        self.cmd_vel_nav_raw = msg
+
     def cmd_vel_safety_callback(self, msg: Twist):
         self.cmd_vel_safety = msg
 
@@ -102,6 +109,8 @@ class StopDebugMonitor(Node):
             int(self.front_obstacle_active),
             f'{self.closest_front_range_m:.3f}' if math.isfinite(self.closest_front_range_m) else '',
             f'{self.front_speed_limit_scale:.3f}' if math.isfinite(self.front_speed_limit_scale) else '',
+            f'{self.cmd_vel_nav_raw.linear.x:.3f}',
+            f'{self.cmd_vel_nav_raw.angular.z:.3f}',
             f'{self.cmd_vel_nav.linear.x:.3f}',
             f'{self.cmd_vel_nav.angular.z:.3f}',
             f'{self.cmd_vel_safety.linear.x:.3f}',
@@ -113,20 +122,28 @@ class StopDebugMonitor(Node):
         ])
         self.csv_file.flush()
 
-        if (
-            self.front_obstacle_active
-            and abs(self.cmd_vel_mux.linear.x) > 0.01
-            and (now - self.last_warning_time) > 1.0
-        ):
+        mux_active_during_stop = False
+        if self.front_obstacle_active:
+            if self.mode == 'AUTO':
+                mux_active_during_stop = (
+                    abs(self.cmd_vel_mux.linear.x) > 0.01
+                    or abs(self.cmd_vel_mux.angular.z) > 0.01
+                )
+            else:
+                mux_active_during_stop = abs(self.cmd_vel_mux.linear.x) > 0.01
+
+        if mux_active_during_stop and (now - self.last_warning_time) > 1.0:
             self.last_warning_time = now
             self.get_logger().warn(
                 'Obstacle active but mux output is still nonzero: '
                 f'mode={self.mode}, '
                 f'range={self.closest_front_range_m:.3f}, '
                 f'scale={self.front_speed_limit_scale:.3f}, '
+                f'nav_raw_x={self.cmd_vel_nav_raw.linear.x:.3f}, '
                 f'nav_x={self.cmd_vel_nav.linear.x:.3f}, '
                 f'safety_x={self.cmd_vel_safety.linear.x:.3f}, '
                 f'mux_x={self.cmd_vel_mux.linear.x:.3f}, '
+                f'mux_w={self.cmd_vel_mux.angular.z:.3f}, '
                 f'odom_x={odom_linear_x:.3f}'
             )
 
