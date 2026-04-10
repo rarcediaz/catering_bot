@@ -28,7 +28,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
-            default_value='0.20',
+            default_value='0.50',
             description='Stop if an obstacle is within this forward distance in meters.'
         ),
         DeclareLaunchArgument(
