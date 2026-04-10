@@ -36,8 +36,8 @@ class XboxMover(Node):
         self.joy.init()
 
         # Motion settings
-        self.MAX_LIN = 0.18
-        self.MAX_ANG = 0.30
+        self.MAX_LIN = 0.12
+        self.MAX_ANG = 0.20
         self.DEADZONE = 0.2
         self.RAMP_TIME_SEC = 0.25
 
