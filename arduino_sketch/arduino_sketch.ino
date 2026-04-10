@@ -34,20 +34,18 @@
 
 #define ENCODER_CPR   6256L   // Keep synced with your ROS config / real decoding mode
 #define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
+#define COMMAND_TIMEOUT_MS 200UL
 #define MAX_PWM       255
 #define LEFT_MOTOR_SIGN  -1
 #define RIGHT_MOTOR_SIGN -1
-#define LEFT_ENCODER_SIGN   1
-#define RIGHT_ENCODER_SIGN  1
-#define LEFT_BREAKAWAY_PWM   50
-#define RIGHT_BREAKAWAY_PWM  50
-#define LEFT_STARTUP_BOOST_PWM  70
-#define RIGHT_STARTUP_BOOST_PWM 70
-#define STARTUP_BOOST_MS 80UL
+#define LEFT_ENCODER_SIGN  -1
+#define RIGHT_ENCODER_SIGN -1
+#define LEFT_BREAKAWAY_PWM   55
+#define RIGHT_BREAKAWAY_PWM  55
+#define LEFT_STARTUP_BOOST_PWM  80
+#define RIGHT_STARTUP_BOOST_PWM 80
+#define STARTUP_BOOST_MS 120UL
 #define MOVING_VEL_THRESHOLD 120.0f
-#define MIN_ASSIST_TARGET 60.0f
-#define TARGET_ACCEL_LIMIT 400.0f
-#define TARGET_DECEL_LIMIT 900.0f
 #define ALLOW_RUNTIME_PID_UPDATES 0
 #define TARGET_SCALE  (1000.0f / (float)LOOP_INTERVAL)
 
@@ -64,8 +62,6 @@ long last_left_ticks = 0;
 long last_right_ticks = 0;
 
 // ---------------- PID state ----------------
-float left_command_target = 0.0f;   // requested velocity in ticks/sec
-float right_command_target = 0.0f;
 float left_target = 0.0f;   // target velocity in ticks/sec
 float right_target = 0.0f;
 
@@ -151,10 +147,6 @@ int applyDriveAssist(
     return pwm;
   }
 
-  if (fabs(target) < MIN_ASSIST_TARGET) {
-    return pwm;
-  }
-
   // Once the wheel is already rolling, let the PID output control it directly.
   if (fabs(measured_vel) >= MOVING_VEL_THRESHOLD) {
     return pwm;
@@ -179,18 +171,6 @@ int suppressReverseCorrection(int pwm, float target) {
   return pwm;
 }
 
-float rampTarget(float current, float desired, float max_delta) {
-  if (desired > current) {
-    current += max_delta;
-    return current > desired ? desired : current;
-  }
-  if (desired < current) {
-    current -= max_delta;
-    return current < desired ? desired : current;
-  }
-  return current;
-}
-
 void resetPidState() {
   left_integral = 0.0f;
   right_integral = 0.0f;
@@ -201,8 +181,6 @@ void resetPidState() {
 }
 
 void stopMotion() {
-  left_command_target = 0.0f;
-  right_command_target = 0.0f;
   left_target = 0.0f;
   right_target = 0.0f;
   left_startup_boost_until_ms = 0;
@@ -323,16 +301,14 @@ void processCommand(char *s) {
       // Keep this protocol compatible with your RPi side.
       // diffdrive_arduino sends motor targets in encoder counts per control loop.
       // Convert that to counts/sec to compare against measured encoder velocity.
-      armStartupBoost(left_command_target, new_left_target, now, left_startup_boost_until_ms);
-      armStartupBoost(right_command_target, new_right_target, now, right_startup_boost_until_ms);
-      left_command_target = new_left_target;
-      right_command_target = new_right_target;
+      armStartupBoost(left_target, new_left_target, now, left_startup_boost_until_ms);
+      armStartupBoost(right_target, new_right_target, now, right_startup_boost_until_ms);
+      left_target = new_left_target;
+      right_target = new_right_target;
       last_command_ms = now;
 
       if (l == 0 && r == 0) {
-        resetPidState();
-        setLeftMotor(0);
-        setRightMotor(0);
+        stopMotion();
       }
       Serial.println("OK");
     } else {
@@ -364,7 +340,7 @@ void processCommand(char *s) {
     interrupts();
     last_left_ticks = 0;
     last_right_ticks = 0;
-    resetPidState();
+    stopMotion();
     Serial.println("OK");
   } else if (s[0] == 'f') {
     // Optional fault query
@@ -428,8 +404,7 @@ void setup() {
   // Right encoder uses pin-change interrupt on D11
   setupRightEncoderPinChangeInterrupt();
 
-  setLeftMotor(0);
-  setRightMotor(0);
+  stopMotion();
   last_loop = millis();
   last_command_ms = last_loop;
   left_startup_boost_until_ms = 0;
@@ -441,29 +416,13 @@ void loop() {
   handleSerial();
 
   unsigned long now = millis();
-  if ((left_command_target != 0.0f || right_command_target != 0.0f ||
-       left_target != 0.0f || right_target != 0.0f) &&
-      (now - last_command_ms > COMMAND_TIMEOUT_MS)) {
+  if ((left_target != 0.0f || right_target != 0.0f) && (now - last_command_ms > COMMAND_TIMEOUT_MS)) {
     // Stop the robot if the host stops refreshing motor commands.
     stopMotion();
   }
   if (now - last_loop >= LOOP_INTERVAL) {
     float dt = (now - last_loop) / 1000.0f;
     last_loop = now;
-    float accel_delta = TARGET_ACCEL_LIMIT * dt;
-    float decel_delta = TARGET_DECEL_LIMIT * dt;
-
-    if (fabs(left_command_target) > fabs(left_target)) {
-      left_target = rampTarget(left_target, left_command_target, accel_delta);
-    } else {
-      left_target = rampTarget(left_target, left_command_target, decel_delta);
-    }
-
-    if (fabs(right_command_target) > fabs(right_target)) {
-      right_target = rampTarget(right_target, right_command_target, accel_delta);
-    } else {
-      right_target = rampTarget(right_target, right_command_target, decel_delta);
-    }
 
     long left_now = 0;
     long right_now = 0;
