@@ -21,7 +21,6 @@ def generate_launch_description():
     stop_debug_log_path = LaunchConfiguration('stop_debug_log_path')
     stop_debug_log_hz = LaunchConfiguration('stop_debug_log_hz')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
-    obstacle_slow_distance_m = LaunchConfiguration('obstacle_slow_distance_m')
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
 
@@ -60,7 +59,6 @@ def generate_launch_description():
         ),
         launch_arguments={
             'obstacle_stop_distance_m': obstacle_stop_distance_m,
-            'obstacle_slow_distance_m': obstacle_slow_distance_m,
             'front_stop_start_x_m': front_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
         }.items(),
@@ -207,11 +205,6 @@ def generate_launch_description():
             'obstacle_stop_distance_m',
             default_value='0.20',
             description='Stop if an obstacle is within this forward distance in meters.'
-        ),
-        DeclareLaunchArgument(
-            'obstacle_slow_distance_m',
-            default_value='1.5',
-            description='Begin reducing forward speed within this distance in meters.'
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',

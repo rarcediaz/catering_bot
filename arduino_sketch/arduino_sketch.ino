@@ -34,10 +34,7 @@
 
 #define ENCODER_CPR   6256L   // Keep synced with your ROS config / real decoding mode
 #define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
-#define COMMAND_TIMEOUT_MS 200UL
 #define MAX_PWM       255
-#define LEFT_MIN_EFFECTIVE_PWM  70
-#define RIGHT_MIN_EFFECTIVE_PWM 70
 #define TARGET_SCALE  (1000.0f / (float)LOOP_INTERVAL)
 
 // ---------------- PID constants ----------------
@@ -71,7 +68,6 @@ uint8_t cmd_index = 0;
 bool last_char_was_newline = false;
 
 unsigned long last_loop = 0;
-unsigned long last_command_ms = 0;
 
 // ---------------- Encoder ISRs ----------------
 void leftEncoderISR() {
@@ -113,19 +109,6 @@ void readEncoderTicksAtomic(long &left, long &right) {
   interrupts();
 }
 
-int applyMinimumDrive(int pwm, float target, int min_pwm) {
-  if (target == 0.0f || pwm == 0) {
-    return pwm;
-  }
-
-  int magnitude = abs(pwm);
-  if (magnitude >= min_pwm) {
-    return pwm;
-  }
-
-  return pwm > 0 ? min_pwm : -min_pwm;
-}
-
 void resetPidState() {
   left_integral = 0.0f;
   right_integral = 0.0f;
@@ -133,14 +116,6 @@ void resetPidState() {
   right_prev_error = 0.0f;
   left_pwm = 0;
   right_pwm = 0;
-}
-
-void stopMotion() {
-  left_target = 0.0f;
-  right_target = 0.0f;
-  resetPidState();
-  setLeftMotor(0);
-  setRightMotor(0);
 }
 
 // ---------------- Motor control ----------------
@@ -250,10 +225,11 @@ void processCommand(char *s) {
       // Convert that to counts/sec to compare against measured encoder velocity.
       left_target = l * TARGET_SCALE;
       right_target = r * TARGET_SCALE;
-      last_command_ms = millis();
 
       if (l == 0 && r == 0) {
-        stopMotion();
+        resetPidState();
+        setLeftMotor(0);
+        setRightMotor(0);
       }
       Serial.println("OK");
     } else {
@@ -283,7 +259,7 @@ void processCommand(char *s) {
     interrupts();
     last_left_ticks = 0;
     last_right_ticks = 0;
-    stopMotion();
+    resetPidState();
     Serial.println("OK");
   } else if (s[0] == 'f') {
     // Optional fault query
@@ -347,9 +323,9 @@ void setup() {
   // Right encoder uses pin-change interrupt on D11
   setupRightEncoderPinChangeInterrupt();
 
-  stopMotion();
+  setLeftMotor(0);
+  setRightMotor(0);
   last_loop = millis();
-  last_command_ms = last_loop;
 }
 
 // ---------------- Main loop ----------------
@@ -357,10 +333,6 @@ void loop() {
   handleSerial();
 
   unsigned long now = millis();
-  if ((left_target != 0.0f || right_target != 0.0f) && (now - last_command_ms > COMMAND_TIMEOUT_MS)) {
-    // Stop the robot if the host stops refreshing motor commands.
-    stopMotion();
-  }
   if (now - last_loop >= LOOP_INTERVAL) {
     float dt = (now - last_loop) / 1000.0f;
     last_loop = now;
@@ -398,10 +370,6 @@ void loop() {
       left_pwm = 0;
       right_pwm = 0;
     }
-
-    // Weighted robot + caster scrub needs more than tiny PID outputs to break static friction.
-    left_pwm = applyMinimumDrive(left_pwm, left_target, LEFT_MIN_EFFECTIVE_PWM);
-    right_pwm = applyMinimumDrive(right_pwm, right_target, RIGHT_MIN_EFFECTIVE_PWM);
 
     setLeftMotor(left_pwm);
     setRightMotor(right_pwm);

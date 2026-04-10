@@ -144,20 +144,20 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.03
+      max_vel_x: 0.08
       max_vel_y: 0.0
-      max_vel_theta: 0.12
-      min_speed_xy: 0.01
-      max_speed_xy: 0.03
-      min_speed_theta: 0.04
+      max_vel_theta: 0.08
+      min_speed_xy: 0.05
+      max_speed_xy: 0.08
+      min_speed_theta: 0.03
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.05
+      acc_lim_x: 0.20
       acc_lim_y: 0.0
-      acc_lim_theta: 0.10
-      decel_lim_x: -0.05
+      acc_lim_theta: 0.08
+      decel_lim_x: -0.20
       decel_lim_y: 0.0
-      decel_lim_theta: -0.10
+      decel_lim_theta: -0.08
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 12
@@ -177,8 +177,8 @@ controller_server:
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.scale: 8.0
+      RotateToGoal.slowing_factor: 8.0
       RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
@@ -320,9 +320,9 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: false
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.12
-    min_rotational_vel: 0.04
-    rotational_acc_lim: 0.10
+    max_rotational_vel: 0.08
+    min_rotational_vel: 0.03
+    rotational_acc_lim: 0.08
 
 robot_state_publisher:
   ros__parameters:
@@ -346,10 +346,10 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.03, 0.0, 0.12]
-    min_velocity: [-0.03, 0.0, -0.12]
-    max_accel: [0.05, 0.0, 0.10]
-    max_decel: [-0.05, 0.0, -0.10]
+    max_velocity: [0.08, 0.0, 0.08]
+    min_velocity: [-0.08, 0.0, -0.08]
+    max_accel: [0.20, 0.0, 0.08]
+    max_decel: [-0.20, 0.0, -0.08]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]

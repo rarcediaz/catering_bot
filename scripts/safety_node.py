@@ -51,7 +51,6 @@ class IntegrityNode(Node):
 
         self.declare_parameter('obstacle_stop_enabled', True)
         self.declare_parameter('obstacle_stop_distance_m', 0.20)
-        self.declare_parameter('obstacle_slow_distance_m', 0.60)
         self.declare_parameter('front_stop_start_x_m', 0.0508)
         self.declare_parameter('front_stop_width_m', 0.8596)
         self.declare_parameter('joystick_timeout_sec', 0.5)
@@ -59,7 +58,6 @@ class IntegrityNode(Node):
 
         self.obstacle_stop_enabled = bool(self.get_parameter('obstacle_stop_enabled').value)
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
-        self.obstacle_slow_distance_m = float(self.get_parameter('obstacle_slow_distance_m').value)
         self.front_stop_start_x_m = float(self.get_parameter('front_stop_start_x_m').value)
         self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
         self.front_stop_half_width_m = 0.5 * self.front_stop_width_m
@@ -67,7 +65,6 @@ class IntegrityNode(Node):
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
 
         self.closest_forward_clearance = math.inf
-        self.front_speed_limit_active = False
         self.speed_limit_scale = 1.0
         self.latest_joy_cmd = Twist()
         self.latest_nav_cmd = Twist()
@@ -210,7 +207,7 @@ class IntegrityNode(Node):
                 self.publish_zero_twist()
                 self.speed_limit_scale_pub.publish(Float32(data=0.0))
                 return
-            self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+            self.speed_limit_scale_pub.publish(Float32(data=1.0))
             return
 
         if self.front_obstacle_active:
@@ -218,10 +215,8 @@ class IntegrityNode(Node):
                 self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, 0.0))
             else:
                 self.publish_zero_twist()
-        elif self.front_speed_limit_active:
-            self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, self.speed_limit_scale))
 
-        self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+        self.speed_limit_scale_pub.publish(Float32(data=0.0 if self.front_obstacle_active else 1.0))
 
     def joy_cmd_callback(self, msg):
         self.latest_joy_cmd = msg
@@ -233,8 +228,6 @@ class IntegrityNode(Node):
         if self.current_mode == "AUTO" and not self.safety_lock:
             if self.front_obstacle_active:
                 self.nav_gate_pub.publish(Twist())
-            elif self.front_speed_limit_active:
-                self.nav_gate_pub.publish(self.limit_forward_motion(msg, self.speed_limit_scale))
             else:
                 self.nav_gate_pub.publish(msg)
         else:
@@ -290,40 +283,23 @@ class IntegrityNode(Node):
             forward_clearance = point_x - self.front_stop_start_x_m
             closest_forward_clearance = min(closest_forward_clearance, forward_clearance)
 
-        previous_speed_limit_active = self.front_speed_limit_active
         self.closest_forward_clearance = closest_forward_clearance
         obstacle_detected = closest_forward_clearance <= self.obstacle_stop_distance_m
-        speed_limit_active = closest_forward_clearance <= self.obstacle_slow_distance_m
-        if obstacle_detected:
-            speed_limit_scale = 0.0
-        elif speed_limit_active:
-            span = max(self.obstacle_slow_distance_m - self.obstacle_stop_distance_m, 1e-3)
-            speed_limit_scale = (closest_forward_clearance - self.obstacle_stop_distance_m) / span
-            speed_limit_scale = max(0.0, min(1.0, speed_limit_scale))
-        else:
-            speed_limit_scale = 1.0
         reported_range = closest_forward_clearance if math.isfinite(closest_forward_clearance) else -1.0
 
         self.front_range_pub.publish(Float32(data=float(reported_range)))
         self.front_obstacle_pub.publish(Bool(data=obstacle_detected))
-        self.speed_limit_scale = speed_limit_scale
-        self.front_speed_limit_active = speed_limit_active
+        self.speed_limit_scale = 0.0 if obstacle_detected else 1.0
 
         if self.current_mode == "AUTO" and not self.safety_lock:
             if obstacle_detected:
                 self.nav_gate_pub.publish(Twist())
                 self.publish_zero_twist()
-            elif speed_limit_active:
-                self.nav_gate_pub.publish(self.limit_forward_motion(self.latest_nav_cmd, self.speed_limit_scale))
 
         if obstacle_detected and not self.front_obstacle_active:
             self.send_log(
                 f"Front obstacle stop active ({closest_forward_clearance:.2f}m <= {self.obstacle_stop_distance_m:.2f}m)",
                 is_crit=True
-            )
-        elif speed_limit_active and not previous_speed_limit_active:
-            self.send_log(
-                f"Front speed limiting active ({closest_forward_clearance:.2f}m <= {self.obstacle_slow_distance_m:.2f}m)"
             )
         elif self.front_obstacle_active and not obstacle_detected:
             self.send_log("Front obstacle cleared.")
