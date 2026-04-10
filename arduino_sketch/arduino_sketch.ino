@@ -36,12 +36,24 @@
 #define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
 #define COMMAND_TIMEOUT_MS 200UL
 #define MAX_PWM       255
-#define LEFT_MIN_EFFECTIVE_PWM  70
-#define RIGHT_MIN_EFFECTIVE_PWM 70
+#define LEFT_MOTOR_SIGN  -1
+#define RIGHT_MOTOR_SIGN -1
+#define LEFT_ENCODER_SIGN   1
+#define RIGHT_ENCODER_SIGN  1
+#define LEFT_BREAKAWAY_PWM   50
+#define RIGHT_BREAKAWAY_PWM  50
+#define LEFT_STARTUP_BOOST_PWM  70
+#define RIGHT_STARTUP_BOOST_PWM 70
+#define STARTUP_BOOST_MS 80UL
+#define MOVING_VEL_THRESHOLD 120.0f
+#define MIN_ASSIST_TARGET 60.0f
+#define TARGET_ACCEL_LIMIT 400.0f
+#define TARGET_DECEL_LIMIT 900.0f
+#define ALLOW_RUNTIME_PID_UPDATES 0
 #define TARGET_SCALE  (1000.0f / (float)LOOP_INTERVAL)
 
 // ---------------- PID constants ----------------
-float Kp = 0.15f;
+float Kp = 0.10f;
 float Ki = 0.0f;
 float Kd = 0.0f;
 
@@ -53,6 +65,8 @@ long last_left_ticks = 0;
 long last_right_ticks = 0;
 
 // ---------------- PID state ----------------
+float left_command_target = 0.0f;   // requested velocity in ticks/sec
+float right_command_target = 0.0f;
 float left_target = 0.0f;   // target velocity in ticks/sec
 float right_target = 0.0f;
 
@@ -72,26 +86,22 @@ bool last_char_was_newline = false;
 
 unsigned long last_loop = 0;
 unsigned long last_command_ms = 0;
+unsigned long left_startup_boost_until_ms = 0;
+unsigned long right_startup_boost_until_ms = 0;
 
 // ---------------- Encoder ISRs ----------------
 void leftEncoderISR() {
   bool a = digitalRead(LEFT_ENC_A);
   bool b = digitalRead(LEFT_ENC_B);
-  if (a == b) {
-    left_ticks++;
-  } else {
-    left_ticks--;
-  }
+  int delta = (a == b) ? 1 : -1;
+  left_ticks += LEFT_ENCODER_SIGN * delta;
 }
 
 void rightEncoderISR() {
   bool a = digitalRead(RIGHT_ENC_A);
   bool b = digitalRead(RIGHT_ENC_B);
-  if (a == b) {
-    right_ticks--;
-  } else {
-    right_ticks++;
-  }
+  int delta = (a == b) ? -1 : 1;
+  right_ticks += RIGHT_ENCODER_SIGN * delta;
 }
 
 // Pin-change interrupt vector for D8..D13 on Uno/Nano (PORTB)
@@ -113,17 +123,73 @@ void readEncoderTicksAtomic(long &left, long &right) {
   interrupts();
 }
 
-int applyMinimumDrive(int pwm, float target, int min_pwm) {
+void armStartupBoost(float previous_target, float new_target, unsigned long now, unsigned long &boost_until_ms) {
+  bool target_was_zero = fabs(previous_target) < 1e-3f;
+  bool target_is_zero = fabs(new_target) < 1e-3f;
+  bool direction_changed = !target_was_zero && !target_is_zero &&
+    ((previous_target > 0.0f && new_target < 0.0f) || (previous_target < 0.0f && new_target > 0.0f));
+
+  if (target_is_zero) {
+    boost_until_ms = 0;
+    return;
+  }
+
+  if (target_was_zero || direction_changed) {
+    boost_until_ms = now + STARTUP_BOOST_MS;
+  }
+}
+
+int applyDriveAssist(
+  int pwm,
+  float target,
+  float measured_vel,
+  unsigned long now,
+  unsigned long boost_until_ms,
+  int breakaway_pwm,
+  int startup_boost_pwm)
+{
   if (target == 0.0f || pwm == 0) {
     return pwm;
   }
 
+  if (fabs(target) < MIN_ASSIST_TARGET) {
+    return pwm;
+  }
+
+  // Once the wheel is already rolling, let the PID output control it directly.
+  if (fabs(measured_vel) >= MOVING_VEL_THRESHOLD) {
+    return pwm;
+  }
+
   int magnitude = abs(pwm);
+  int min_pwm = (now <= boost_until_ms) ? startup_boost_pwm : breakaway_pwm;
   if (magnitude >= min_pwm) {
     return pwm;
   }
 
   return pwm > 0 ? min_pwm : -min_pwm;
+}
+
+int suppressReverseCorrection(int pwm, float target) {
+  if (target > 0.0f && pwm < 0) {
+    return 0;
+  }
+  if (target < 0.0f && pwm > 0) {
+    return 0;
+  }
+  return pwm;
+}
+
+float rampTarget(float current, float desired, float max_delta) {
+  if (desired > current) {
+    current += max_delta;
+    return current > desired ? desired : current;
+  }
+  if (desired < current) {
+    current -= max_delta;
+    return current < desired ? desired : current;
+  }
+  return current;
 }
 
 void resetPidState() {
@@ -136,8 +202,12 @@ void resetPidState() {
 }
 
 void stopMotion() {
+  left_command_target = 0.0f;
+  right_command_target = 0.0f;
   left_target = 0.0f;
   right_target = 0.0f;
+  left_startup_boost_until_ms = 0;
+  right_startup_boost_until_ms = 0;
   resetPidState();
   setLeftMotor(0);
   setRightMotor(0);
@@ -145,6 +215,7 @@ void stopMotion() {
 
 // ---------------- Motor control ----------------
 void setLeftMotor(int speed) {
+  speed *= LEFT_MOTOR_SIGN;
   speed = constrain(speed, -MAX_PWM, MAX_PWM);
 
   if (speed == 0) {
@@ -163,6 +234,7 @@ void setLeftMotor(int speed) {
 }
 
 void setRightMotor(int speed) {
+  speed *= RIGHT_MOTOR_SIGN;
   speed = constrain(speed, -MAX_PWM, MAX_PWM);
 
   if (speed == 0) {
@@ -245,12 +317,18 @@ void processCommand(char *s) {
     int l = 0;
     int r = 0;
     if (parseMotorCommand(s, l, r)) {
+      float new_left_target = l * TARGET_SCALE;
+      float new_right_target = r * TARGET_SCALE;
+      unsigned long now = millis();
+
       // Keep this protocol compatible with your RPi side.
       // diffdrive_arduino sends motor targets in encoder counts per control loop.
       // Convert that to counts/sec to compare against measured encoder velocity.
-      left_target = l * TARGET_SCALE;
-      right_target = r * TARGET_SCALE;
-      last_command_ms = millis();
+      armStartupBoost(left_command_target, new_left_target, now, left_startup_boost_until_ms);
+      armStartupBoost(right_command_target, new_right_target, now, right_startup_boost_until_ms);
+      left_command_target = new_left_target;
+      right_command_target = new_right_target;
+      last_command_ms = now;
 
       if (l == 0 && r == 0) {
         stopMotion();
@@ -269,9 +347,11 @@ void processCommand(char *s) {
   } else if (s[0] == 'u') {
     float p = 0.0f, d = 0.0f, i = 0.0f, o = 0.0f;
     if (parsePidCommand(s, p, d, i, o)) {
+#if ALLOW_RUNTIME_PID_UPDATES
       Kp = p;
       Kd = d;
       Ki = i;
+#endif
       Serial.println("OK");
     } else {
       Serial.println("ERR");
@@ -350,6 +430,8 @@ void setup() {
   stopMotion();
   last_loop = millis();
   last_command_ms = last_loop;
+  left_startup_boost_until_ms = 0;
+  right_startup_boost_until_ms = 0;
 }
 
 // ---------------- Main loop ----------------
@@ -357,13 +439,29 @@ void loop() {
   handleSerial();
 
   unsigned long now = millis();
-  if ((left_target != 0.0f || right_target != 0.0f) && (now - last_command_ms > COMMAND_TIMEOUT_MS)) {
+  if ((left_command_target != 0.0f || right_command_target != 0.0f ||
+       left_target != 0.0f || right_target != 0.0f) &&
+      (now - last_command_ms > COMMAND_TIMEOUT_MS)) {
     // Stop the robot if the host stops refreshing motor commands.
     stopMotion();
   }
   if (now - last_loop >= LOOP_INTERVAL) {
     float dt = (now - last_loop) / 1000.0f;
     last_loop = now;
+    float accel_delta = TARGET_ACCEL_LIMIT * dt;
+    float decel_delta = TARGET_DECEL_LIMIT * dt;
+
+    if (fabs(left_command_target) > fabs(left_target)) {
+      left_target = rampTarget(left_target, left_command_target, accel_delta);
+    } else {
+      left_target = rampTarget(left_target, left_command_target, decel_delta);
+    }
+
+    if (fabs(right_command_target) > fabs(right_target)) {
+      right_target = rampTarget(right_target, right_command_target, accel_delta);
+    } else {
+      right_target = rampTarget(right_target, right_command_target, decel_delta);
+    }
 
     long left_now = 0;
     long right_now = 0;
@@ -383,6 +481,7 @@ void loop() {
     float left_derivative = (left_error - left_prev_error) / dt;
     left_pwm = (int)(Kp * left_error + Ki * left_integral + Kd * left_derivative);
     left_pwm = constrain(left_pwm, -MAX_PWM, MAX_PWM);
+    left_pwm = suppressReverseCorrection(left_pwm, left_target);
     left_prev_error = left_error;
 
     // Right PID
@@ -391,6 +490,7 @@ void loop() {
     float right_derivative = (right_error - right_prev_error) / dt;
     right_pwm = (int)(Kp * right_error + Ki * right_integral + Kd * right_derivative);
     right_pwm = constrain(right_pwm, -MAX_PWM, MAX_PWM);
+    right_pwm = suppressReverseCorrection(right_pwm, right_target);
     right_prev_error = right_error;
 
     // Clean stop when targets are zero
@@ -399,9 +499,13 @@ void loop() {
       right_pwm = 0;
     }
 
-    // Weighted robot + caster scrub needs more than tiny PID outputs to break static friction.
-    left_pwm = applyMinimumDrive(left_pwm, left_target, LEFT_MIN_EFFECTIVE_PWM);
-    right_pwm = applyMinimumDrive(right_pwm, right_target, RIGHT_MIN_EFFECTIVE_PWM);
+    // Weighted robot + caster scrub needs extra help only while breaking static friction.
+    left_pwm = applyDriveAssist(
+      left_pwm, left_target, left_vel, now, left_startup_boost_until_ms,
+      LEFT_BREAKAWAY_PWM, LEFT_STARTUP_BOOST_PWM);
+    right_pwm = applyDriveAssist(
+      right_pwm, right_target, right_vel, now, right_startup_boost_until_ms,
+      RIGHT_BREAKAWAY_PWM, RIGHT_STARTUP_BOOST_PWM);
 
     setLeftMotor(left_pwm);
     setRightMotor(right_pwm);
