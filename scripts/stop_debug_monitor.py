@@ -25,6 +25,8 @@ class StopDebugMonitor(Node):
         self.mode = 'UNKNOWN'
         self.front_obstacle_active = False
         self.closest_front_range_m = math.nan
+        self.front_stop_distance_m = math.nan
+        self.front_forward_speed_mps = math.nan
         self.front_speed_limit_scale = math.nan
 
         self.cmd_vel_nav = Twist()
@@ -38,6 +40,8 @@ class StopDebugMonitor(Node):
         self.create_subscription(String, '/robot_state/mode', self.mode_callback, 10)
         self.create_subscription(Bool, '/robot_health/front_obstacle_active', self.front_obstacle_callback, 10)
         self.create_subscription(Float32, '/robot_health/closest_front_range_m', self.front_range_callback, 10)
+        self.create_subscription(Float32, '/robot_health/front_stop_distance_m', self.front_stop_distance_callback, 10)
+        self.create_subscription(Float32, '/robot_health/front_forward_speed_mps', self.front_forward_speed_callback, 10)
         self.create_subscription(Float32, '/robot_health/front_speed_limit_scale', self.front_speed_limit_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_nav', self.cmd_vel_nav_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_nav_raw', self.cmd_vel_nav_raw_callback, 10)
@@ -54,6 +58,8 @@ class StopDebugMonitor(Node):
                 'mode',
                 'front_obstacle_active',
                 'closest_front_range_m',
+                'front_stop_distance_m',
+                'front_forward_speed_mps',
                 'front_speed_limit_scale',
                 'cmd_vel_nav_raw_linear_x',
                 'cmd_vel_nav_raw_angular_z',
@@ -79,6 +85,12 @@ class StopDebugMonitor(Node):
 
     def front_range_callback(self, msg: Float32):
         self.closest_front_range_m = msg.data
+
+    def front_stop_distance_callback(self, msg: Float32):
+        self.front_stop_distance_m = msg.data
+
+    def front_forward_speed_callback(self, msg: Float32):
+        self.front_forward_speed_mps = msg.data
 
     def front_speed_limit_callback(self, msg: Float32):
         self.front_speed_limit_scale = msg.data
@@ -108,6 +120,8 @@ class StopDebugMonitor(Node):
             self.mode,
             int(self.front_obstacle_active),
             f'{self.closest_front_range_m:.3f}' if math.isfinite(self.closest_front_range_m) else '',
+            f'{self.front_stop_distance_m:.3f}' if math.isfinite(self.front_stop_distance_m) else '',
+            f'{self.front_forward_speed_mps:.3f}' if math.isfinite(self.front_forward_speed_mps) else '',
             f'{self.front_speed_limit_scale:.3f}' if math.isfinite(self.front_speed_limit_scale) else '',
             f'{self.cmd_vel_nav_raw.linear.x:.3f}',
             f'{self.cmd_vel_nav_raw.angular.z:.3f}',
@@ -138,6 +152,8 @@ class StopDebugMonitor(Node):
                 'Obstacle active but mux output is still nonzero: '
                 f'mode={self.mode}, '
                 f'range={self.closest_front_range_m:.3f}, '
+                f'stop={self.front_stop_distance_m:.3f}, '
+                f'forward_speed={self.front_forward_speed_mps:.3f}, '
                 f'scale={self.front_speed_limit_scale:.3f}, '
                 f'nav_raw_x={self.cmd_vel_nav_raw.linear.x:.3f}, '
                 f'nav_x={self.cmd_vel_nav.linear.x:.3f}, '
