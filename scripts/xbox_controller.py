@@ -36,10 +36,10 @@ class XboxMover(Node):
         self.joy.init()
 
         # Motion settings
-        self.MAX_LIN = 0.18
-        self.MAX_ANG = 0.30
+        self.MAX_LIN = 0.70
+        self.MAX_ANG = 1.00
         self.DEADZONE = 0.2
-        self.RAMP_TIME_SEC = 0.25
+        self.RAMP_TIME_SEC = 0.20
 
         self.FLIP_LINEAR = False
         self.FLIP_ANGULAR = False
@@ -48,7 +48,7 @@ class XboxMover(Node):
         self.current_angular = 0.0
         self.last_update_time = time.monotonic()
 
-        self.timer = self.create_timer(0.1, self.update_and_publish)
+        self.timer = self.create_timer(0.02, self.update_and_publish)
 
         self.get_logger().info(f"--- XBOX CONTROL ACTIVE: {self.joy.get_name()} ---")
         self.get_logger().info("Status: Defaulting to STOP mode until MANUAL selected.")

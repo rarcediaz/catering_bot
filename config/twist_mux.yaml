@@ -3,13 +3,13 @@ twist_mux:
     topics:
       safety:
         topic: /cmd_vel_safety
-        timeout: 0.2
+        timeout: 0.1
         priority: 255
       joystick:
         topic: /cmd_vel_joy
-        timeout: 0.5
+        timeout: 0.2
         priority: 100
       navigation:
         topic: /cmd_vel_nav
-        timeout: 0.5
+        timeout: 0.2
         priority: 10

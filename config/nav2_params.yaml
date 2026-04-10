@@ -144,20 +144,20 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.06
+      max_vel_x: 0.18
       max_vel_y: 0.0
-      max_vel_theta: 0.14
-      min_speed_xy: 0.04
-      max_speed_xy: 0.06
-      min_speed_theta: 0.06
+      max_vel_theta: 0.45
+      min_speed_xy: 0.06
+      max_speed_xy: 0.18
+      min_speed_theta: 0.12
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.10
+      acc_lim_x: 0.40
       acc_lim_y: 0.0
-      acc_lim_theta: 0.14
-      decel_lim_x: -0.10
+      acc_lim_theta: 0.80
+      decel_lim_x: -0.60
       decel_lim_y: 0.0
-      decel_lim_theta: -0.14
+      decel_lim_theta: -1.00
       vx_samples: 10
       vy_samples: 5
       vtheta_samples: 30
@@ -320,9 +320,9 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: false
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.14
-    min_rotational_vel: 0.06
-    rotational_acc_lim: 0.14
+    max_rotational_vel: 0.45
+    min_rotational_vel: 0.12
+    rotational_acc_lim: 0.80
 
 robot_state_publisher:
   ros__parameters:
@@ -346,10 +346,10 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.06, 0.0, 0.14]
-    min_velocity: [-0.06, 0.0, -0.14]
-    max_accel: [0.10, 0.0, 0.14]
-    max_decel: [-0.10, 0.0, -0.14]
+    max_velocity: [0.18, 0.0, 0.45]
+    min_velocity: [-0.18, 0.0, -0.45]
+    max_accel: [0.40, 0.0, 0.80]
+    max_decel: [-0.60, 0.0, -1.00]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
