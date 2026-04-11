@@ -35,9 +35,12 @@ class XboxMover(Node):
         self.joy = pygame.joystick.Joystick(0)
         self.joy.init()
 
-        # Motion settings
-        self.MAX_LIN = 0.70
-        self.MAX_ANG = 1.00
+        # Motion settings. Default to a localization-safe profile and allow
+        # a held turbo button for higher speed when the operator needs it.
+        self.MAX_LIN = 0.28
+        self.MAX_ANG = 0.35
+        self.TURBO_MAX_LIN = 0.70
+        self.TURBO_MAX_ANG = 1.00
         self.DEADZONE = 0.2
         self.RAMP_TIME_SEC = 0.20
 
@@ -72,6 +75,15 @@ class XboxMover(Node):
             return 0.0
         return self._ramp_towards(current, target, max_delta)
 
+    def _shape_axis(self, raw_value):
+        magnitude = abs(raw_value)
+        if magnitude <= self.DEADZONE:
+            return 0.0
+
+        normalized = (magnitude - self.DEADZONE) / (1.0 - self.DEADZONE)
+        shaped = normalized * normalized
+        return math.copysign(shaped, raw_value)
+
     def update_and_publish(self):
         pygame.event.pump()
         now = time.monotonic()
@@ -87,26 +99,15 @@ class XboxMover(Node):
             return
 
         # --- Everything below only runs if mode is MANUAL ---
-        x = self.joy.get_axis(0)
-        y = -self.joy.get_axis(1)
+        raw_angular = self.joy.get_axis(0)
+        raw_linear = -self.joy.get_axis(1)
 
-        magnitude = math.sqrt(x**2 + y**2)
-        target_linear = 0.0
-        target_angular = 0.0
+        turbo_enabled = bool(self.joy.get_button(5))
+        max_lin = self.TURBO_MAX_LIN if turbo_enabled else self.MAX_LIN
+        max_ang = self.TURBO_MAX_ANG if turbo_enabled else self.MAX_ANG
 
-        if magnitude > self.DEADZONE:
-            angle = math.degrees(math.atan2(y, x))
-            if angle < 0:
-                angle += 360
-
-            if 45 <= angle < 135:
-                target_linear = self.MAX_LIN
-            elif 135 <= angle < 225:
-                target_angular = self.MAX_ANG
-            elif 225 <= angle < 315:
-                target_linear = -self.MAX_LIN
-            else:
-                target_angular = -self.MAX_ANG
+        target_linear = self._shape_axis(raw_linear) * max_lin
+        target_angular = self._shape_axis(raw_angular) * max_ang
 
         if self.FLIP_LINEAR:
             target_linear *= -1
@@ -119,8 +120,8 @@ class XboxMover(Node):
             self.current_angular = 0.0
             self.get_logger().warn("!!! EMERGENCY STOP !!!")
         else:
-            lin_delta = (self.MAX_LIN / self.RAMP_TIME_SEC) * dt
-            ang_delta = (self.MAX_ANG / self.RAMP_TIME_SEC) * dt
+            lin_delta = (max_lin / self.RAMP_TIME_SEC) * dt
+            ang_delta = (max_ang / self.RAMP_TIME_SEC) * dt
             self.current_linear = self._apply_axis_ramp(self.current_linear, target_linear, lin_delta)
             self.current_angular = self._apply_axis_ramp(self.current_angular, target_angular, ang_delta)
 
