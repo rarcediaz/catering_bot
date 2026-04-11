@@ -10,7 +10,10 @@ def generate_launch_description():
     obstacle_stop_speed_mps = LaunchConfiguration('obstacle_stop_speed_mps')
     obstacle_slowdown_margin_m = LaunchConfiguration('obstacle_slowdown_margin_m')
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
+    rear_stop_start_x_m = LaunchConfiguration('rear_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
+    side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
+    side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     scan_topic = LaunchConfiguration('scan_topic')
 
     safety_node = Node(
@@ -24,7 +27,10 @@ def generate_launch_description():
             'obstacle_stop_speed_mps': obstacle_stop_speed_mps,
             'obstacle_slowdown_margin_m': obstacle_slowdown_margin_m,
             'front_stop_start_x_m': front_stop_start_x_m,
+            'rear_stop_start_x_m': rear_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
+            'side_stop_distance_m': side_stop_distance_m,
+            'side_stop_start_y_m': side_stop_start_y_m,
         }],
         remappings=[
             ('/scan', scan_topic),
@@ -58,9 +64,24 @@ def generate_launch_description():
             description='Distance from lidar to the robot front edge in meters.'
         ),
         DeclareLaunchArgument(
+            'rear_stop_start_x_m',
+            default_value='1.016',
+            description='Distance from lidar to the robot rear edge in meters.'
+        ),
+        DeclareLaunchArgument(
             'front_stop_width_m',
             default_value='0.8596',
             description='Width of the forward stop corridor in meters.'
+        ),
+        DeclareLaunchArgument(
+            'side_stop_distance_m',
+            default_value='0.25',
+            description='Block left/right turns when an obstacle is within this side distance in meters.'
+        ),
+        DeclareLaunchArgument(
+            'side_stop_start_y_m',
+            default_value='0.34',
+            description='Distance from lidar centerline to the robot side edge in meters.'
         ),
         DeclareLaunchArgument(
             'scan_topic',

@@ -45,6 +45,9 @@ class IntegrityNode(Node):
         self.current_mode = "STOP"
         self.safety_lock = False
         self.front_obstacle_active = False
+        self.left_obstacle_active = False
+        self.right_obstacle_active = False
+        self.rear_obstacle_active = False
         self.latency_fail_count = 0
         self.history = []
         self.MAX_SAMPLES = 20
@@ -56,7 +59,10 @@ class IntegrityNode(Node):
         self.declare_parameter('obstacle_stop_speed_mps', 0.60)
         self.declare_parameter('obstacle_slowdown_margin_m', 0.15)
         self.declare_parameter('front_stop_start_x_m', 0.0508)
+        self.declare_parameter('rear_stop_start_x_m', 1.016)
         self.declare_parameter('front_stop_width_m', 0.8596)
+        self.declare_parameter('side_stop_distance_m', 0.25)
+        self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.5)
         self.declare_parameter('nav_timeout_sec', 0.5)
 
@@ -66,12 +72,18 @@ class IntegrityNode(Node):
         self.obstacle_stop_speed_mps = float(self.get_parameter('obstacle_stop_speed_mps').value)
         self.obstacle_slowdown_margin_m = float(self.get_parameter('obstacle_slowdown_margin_m').value)
         self.front_stop_start_x_m = float(self.get_parameter('front_stop_start_x_m').value)
+        self.rear_stop_start_x_m = float(self.get_parameter('rear_stop_start_x_m').value)
         self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
         self.front_stop_half_width_m = 0.5 * self.front_stop_width_m
+        self.side_stop_distance_m = float(self.get_parameter('side_stop_distance_m').value)
+        self.side_stop_start_y_m = float(self.get_parameter('side_stop_start_y_m').value)
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
 
         self.closest_forward_clearance = math.inf
+        self.closest_left_clearance = math.inf
+        self.closest_right_clearance = math.inf
+        self.closest_rear_clearance = math.inf
         self.dynamic_stop_distance_m = self.obstacle_stop_distance_m
         self.forward_speed_mps = 0.0
         self.speed_limit_scale = 1.0
@@ -169,6 +181,16 @@ class IntegrityNode(Node):
     def publish_zero_twist(self):
         self.safety_cmd_pub.publish(Twist())
 
+    def copy_twist(self, cmd):
+        copied = Twist()
+        copied.linear.x = cmd.linear.x
+        copied.linear.y = cmd.linear.y
+        copied.linear.z = cmd.linear.z
+        copied.angular.x = cmd.angular.x
+        copied.angular.y = cmd.angular.y
+        copied.angular.z = cmd.angular.z
+        return copied
+
     def clear_cached_commands(self):
         self.latest_joy_cmd = Twist()
         self.latest_nav_cmd = Twist()
@@ -215,20 +237,20 @@ class IntegrityNode(Node):
 
         active_cmd = self.get_active_command()
         if active_cmd is None:
-            if self.front_obstacle_active or self.speed_limit_scale < 1.0:
+            if self.has_active_motion_constraints():
                 self.publish_zero_twist()
                 self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
                 return
             self.speed_limit_scale_pub.publish(Float32(data=1.0))
             return
 
-        if self.front_obstacle_active:
-            if self.current_mode == "MANUAL":
-                self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, 0.0))
-            else:
-                self.publish_zero_twist()
-        elif self.speed_limit_scale < 1.0:
-            self.safety_cmd_pub.publish(self.limit_forward_motion(active_cmd, self.speed_limit_scale))
+        constrained_cmd = self.apply_motion_constraints(
+            active_cmd,
+            auto_front_stop=(self.current_mode == "AUTO")
+        )
+
+        if self.has_active_motion_constraints():
+            self.safety_cmd_pub.publish(constrained_cmd)
 
         self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
 
@@ -240,10 +262,8 @@ class IntegrityNode(Node):
         self.latest_nav_cmd = msg
         self.latest_nav_time = time.monotonic()
         if self.current_mode == "AUTO" and not self.safety_lock:
-            if self.front_obstacle_active:
-                self.nav_gate_pub.publish(Twist())
-            else:
-                self.nav_gate_pub.publish(msg)
+            constrained_cmd = self.apply_motion_constraints(msg, auto_front_stop=True)
+            self.nav_gate_pub.publish(constrained_cmd)
         else:
             self.nav_gate_pub.publish(Twist())
 
@@ -263,8 +283,8 @@ class IntegrityNode(Node):
 
     def get_forward_speed_mps(self):
         cmd = self.get_active_command()
-        cmd_speed = cmd.linear.x if cmd is not None else 0.0
-        return max(0.0, self.forward_speed_mps, cmd_speed)
+        cmd_speed = abs(cmd.linear.x) if cmd is not None else 0.0
+        return max(0.0, abs(self.forward_speed_mps), cmd_speed)
 
     def get_dynamic_stop_distance(self):
         forward_speed = self.get_forward_speed_mps()
@@ -276,17 +296,34 @@ class IntegrityNode(Node):
         stop_distance = self.obstacle_stop_distance_m + speed_ratio * (max_distance - self.obstacle_stop_distance_m)
         return stop_distance, forward_speed
 
-    def limit_forward_motion(self, cmd, scale):
-        limited = Twist()
-        limited.linear.x = cmd.linear.x
-        limited.linear.y = cmd.linear.y
-        limited.linear.z = cmd.linear.z
-        limited.angular.x = cmd.angular.x
-        limited.angular.y = cmd.angular.y
-        limited.angular.z = cmd.angular.z
+    def has_active_motion_constraints(self):
+        return (
+            self.front_obstacle_active or
+            self.left_obstacle_active or
+            self.right_obstacle_active or
+            self.rear_obstacle_active or
+            self.speed_limit_scale < 1.0
+        )
 
-        if limited.linear.x > 0.0:
-            limited.linear.x *= scale
+    def apply_motion_constraints(self, cmd, auto_front_stop=False):
+        if auto_front_stop and self.front_obstacle_active:
+            return Twist()
+
+        limited = self.copy_twist(cmd)
+
+        if self.front_obstacle_active and limited.linear.x > 0.0:
+            limited.linear.x = 0.0
+        elif self.speed_limit_scale < 1.0 and limited.linear.x > 0.0:
+            limited.linear.x *= self.speed_limit_scale
+
+        if self.rear_obstacle_active and limited.linear.x < 0.0:
+            limited.linear.x = 0.0
+
+        if self.left_obstacle_active and limited.angular.z > 0.0:
+            limited.angular.z = 0.0
+
+        if self.right_obstacle_active and limited.angular.z < 0.0:
+            limited.angular.z = 0.0
 
         return limited
 
@@ -295,6 +332,9 @@ class IntegrityNode(Node):
             return
 
         closest_forward_clearance = math.inf
+        closest_left_clearance = math.inf
+        closest_right_clearance = math.inf
+        closest_rear_clearance = math.inf
 
         for index, distance in enumerate(msg.ranges):
             angle = msg.angle_min + (index * msg.angle_increment)
@@ -308,17 +348,33 @@ class IntegrityNode(Node):
             point_y = distance * math.sin(angle)
 
             if point_x < self.front_stop_start_x_m:
-                continue
-            if abs(point_y) > self.front_stop_half_width_m:
-                continue
+                pass
+            elif abs(point_y) <= self.front_stop_half_width_m:
+                forward_clearance = point_x - self.front_stop_start_x_m
+                closest_forward_clearance = min(closest_forward_clearance, forward_clearance)
 
-            forward_clearance = point_x - self.front_stop_start_x_m
-            closest_forward_clearance = min(closest_forward_clearance, forward_clearance)
+            if point_x <= -self.rear_stop_start_x_m and abs(point_y) <= self.front_stop_half_width_m:
+                rear_clearance = (-point_x) - self.rear_stop_start_x_m
+                closest_rear_clearance = min(closest_rear_clearance, rear_clearance)
+
+            if -self.rear_stop_start_x_m <= point_x <= self.front_stop_start_x_m:
+                if point_y >= self.side_stop_start_y_m:
+                    left_clearance = point_y - self.side_stop_start_y_m
+                    closest_left_clearance = min(closest_left_clearance, left_clearance)
+                elif point_y <= -self.side_stop_start_y_m:
+                    right_clearance = (-point_y) - self.side_stop_start_y_m
+                    closest_right_clearance = min(closest_right_clearance, right_clearance)
 
         self.closest_forward_clearance = closest_forward_clearance
+        self.closest_left_clearance = closest_left_clearance
+        self.closest_right_clearance = closest_right_clearance
+        self.closest_rear_clearance = closest_rear_clearance
         dynamic_stop_distance, forward_speed = self.get_dynamic_stop_distance()
         slowdown_distance = dynamic_stop_distance + max(0.0, self.obstacle_slowdown_margin_m)
         obstacle_detected = closest_forward_clearance <= dynamic_stop_distance
+        left_obstacle_detected = closest_left_clearance <= self.side_stop_distance_m
+        right_obstacle_detected = closest_right_clearance <= self.side_stop_distance_m
+        rear_obstacle_detected = closest_rear_clearance <= dynamic_stop_distance
         reported_range = closest_forward_clearance if math.isfinite(closest_forward_clearance) else -1.0
         if math.isfinite(closest_forward_clearance) and closest_forward_clearance < slowdown_distance:
             margin = max(self.obstacle_slowdown_margin_m, 1e-3)
@@ -340,6 +396,9 @@ class IntegrityNode(Node):
             if obstacle_detected:
                 self.nav_gate_pub.publish(Twist())
                 self.publish_zero_twist()
+            else:
+                constrained_cmd = self.apply_motion_constraints(self.latest_nav_cmd, auto_front_stop=True)
+                self.nav_gate_pub.publish(constrained_cmd)
 
         if obstacle_detected and not self.front_obstacle_active:
             self.send_log(
@@ -349,7 +408,34 @@ class IntegrityNode(Node):
         elif self.front_obstacle_active and not obstacle_detected:
             self.send_log("Front obstacle cleared.")
 
+        if left_obstacle_detected and not self.left_obstacle_active:
+            self.send_log(
+                f"Left turn blocked ({closest_left_clearance:.2f}m <= {self.side_stop_distance_m:.2f}m).",
+                is_crit=True
+            )
+        elif self.left_obstacle_active and not left_obstacle_detected:
+            self.send_log("Left side clear.")
+
+        if right_obstacle_detected and not self.right_obstacle_active:
+            self.send_log(
+                f"Right turn blocked ({closest_right_clearance:.2f}m <= {self.side_stop_distance_m:.2f}m).",
+                is_crit=True
+            )
+        elif self.right_obstacle_active and not right_obstacle_detected:
+            self.send_log("Right side clear.")
+
+        if rear_obstacle_detected and not self.rear_obstacle_active:
+            self.send_log(
+                f"Rear motion blocked ({closest_rear_clearance:.2f}m <= {dynamic_stop_distance:.2f}m).",
+                is_crit=True
+            )
+        elif self.rear_obstacle_active and not rear_obstacle_detected:
+            self.send_log("Rear area clear.")
+
         self.front_obstacle_active = obstacle_detected
+        self.left_obstacle_active = left_obstacle_detected
+        self.right_obstacle_active = right_obstacle_detected
+        self.rear_obstacle_active = rear_obstacle_detected
 
     def sync_callback(self, msg):
         if not msg.data:

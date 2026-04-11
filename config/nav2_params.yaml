@@ -136,28 +136,28 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20
-      yaw_goal_tolerance: 0.30
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.52
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.14
+      max_vel_x: 0.70
       max_vel_y: 0.0
-      max_vel_theta: 0.30
-      min_speed_xy: 0.05
-      max_speed_xy: 0.14
+      max_vel_theta: 1.00
+      min_speed_xy: 0.03
+      max_speed_xy: 0.70
       min_speed_theta: 0.10
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.28
+      acc_lim_x: 0.35
       acc_lim_y: 0.0
-      acc_lim_theta: 0.50
-      decel_lim_x: -0.40
+      acc_lim_theta: 0.65
+      decel_lim_x: -0.50
       decel_lim_y: 0.0
-      decel_lim_theta: -0.60
+      decel_lim_theta: -0.80
       vx_samples: 10
       vy_samples: 5
       vtheta_samples: 24
@@ -165,20 +165,20 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.20
+      xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.02
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      PathAlign.scale: 10.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 8.0
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 28.0
-      GoalDist.scale: 20.0
-      RotateToGoal.scale: 96.0
-      RotateToGoal.slowing_factor: 14.0
+      PathAlign.scale: 4.0
+      PathAlign.forward_point_distance: 0.05
+      GoalAlign.scale: 3.0
+      GoalAlign.forward_point_distance: 0.05
+      PathDist.scale: 20.0
+      GoalDist.scale: 14.0
+      RotateToGoal.scale: 72.0
+      RotateToGoal.slowing_factor: 20.0
       RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
@@ -320,9 +320,9 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: false
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.30
-    min_rotational_vel: 0.10
-    rotational_acc_lim: 0.50
+    max_rotational_vel: 1.00
+    min_rotational_vel: 0.12
+    rotational_acc_lim: 0.65
 
 robot_state_publisher:
   ros__parameters:
@@ -346,10 +346,10 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.14, 0.0, 0.30]
-    min_velocity: [-0.14, 0.0, -0.30]
-    max_accel: [0.28, 0.0, 0.50]
-    max_decel: [-0.40, 0.0, -0.60]
+    max_velocity: [0.70, 0.0, 1.00]
+    min_velocity: [-0.70, 0.0, -1.00]
+    max_accel: [0.35, 0.0, 0.65]
+    max_decel: [-0.50, 0.0, -0.80]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
