@@ -37,8 +37,8 @@ class XboxMover(Node):
 
         # Motion settings. Default to a localization-safe profile and allow
         # a held turbo button for higher speed when the operator needs it.
-        self.MAX_LIN = 0.22
-        self.MAX_ANG = 0.18
+        self.MAX_LIN = 0.30
+        self.MAX_ANG = 0.28
         self.TURBO_MAX_LIN = 0.70
         self.TURBO_MAX_ANG = 1.00
         self.DEADZONE = 0.2
