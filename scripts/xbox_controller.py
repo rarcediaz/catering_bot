@@ -99,7 +99,7 @@ class XboxMover(Node):
             return
 
         # --- Everything below only runs if mode is MANUAL ---
-        raw_angular = self.joy.get_axis(0)
+        raw_angular = -self.joy.get_axis(0)
         raw_linear = -self.joy.get_axis(1)
 
         turbo_enabled = bool(self.joy.get_button(5))

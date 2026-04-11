@@ -32,7 +32,7 @@
 #define RIGHT_ENC_A 11   // PCINT3 on Uno (Port B)
 #define RIGHT_ENC_B 13
 
-#define ENCODER_CPR   6256L   // Keep synced with your ROS config / real decoding mode
+#define ENCODER_CPR   3136L   // Keep synced with your ROS config / real decoding mode
 #define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
 #define COMMAND_TIMEOUT_MS 200UL
 #define MAX_PWM       255

@@ -10,7 +10,7 @@
       <param name="device">/dev/ttyACM0</param>
       <param name="baud_rate">57600</param>
       <param name="timeout_ms">1000</param>
-      <param name="enc_counts_per_rev">6256</param>
+      <param name="enc_counts_per_rev">3136</param>
     </hardware>
 
     <joint name="left_wheel_joint">
