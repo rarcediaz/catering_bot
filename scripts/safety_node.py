@@ -64,7 +64,7 @@ class IntegrityNode(Node):
         self.declare_parameter('side_stop_distance_m', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.5)
-        self.declare_parameter('nav_timeout_sec', 0.5)
+        self.declare_parameter('nav_timeout_sec', 0.25)
         self.declare_parameter('safety_bypass_mode', False)
 
         self.obstacle_stop_enabled = self.get_bool_parameter('obstacle_stop_enabled')
@@ -254,6 +254,8 @@ class IntegrityNode(Node):
 
         active_cmd = self.get_active_command()
         if active_cmd is None:
+            if self.current_mode == "AUTO":
+                self.nav_gate_pub.publish(Twist())
             if self.has_active_motion_constraints():
                 self.publish_zero_twist()
                 self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
