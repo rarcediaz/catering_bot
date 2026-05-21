@@ -1,10 +1,15 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    package_name = 'my_bot'
+    use_safety_node = LaunchConfiguration('use_safety_node')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_stop_distance_max_m = LaunchConfiguration('obstacle_stop_distance_max_m')
     obstacle_stop_speed_mps = LaunchConfiguration('obstacle_stop_speed_mps')
@@ -14,14 +19,18 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
-    scan_topic = LaunchConfiguration('scan_topic')
 
-    safety_node = Node(
-        package='my_bot',
-        executable='safety_node.py',
-        output='screen',
-        parameters=[{
-            'obstacle_stop_enabled': True,
+    robot_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory(package_name),
+                'launch',
+                'launch_robot.launch.py'
+            )
+        ),
+        launch_arguments={
+            'use_joystick': 'false',
+            'use_safety_node': use_safety_node,
             'obstacle_stop_distance_m': obstacle_stop_distance_m,
             'obstacle_stop_distance_max_m': obstacle_stop_distance_max_m,
             'obstacle_stop_speed_mps': obstacle_stop_speed_mps,
@@ -31,13 +40,16 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
-        }],
-        remappings=[
-            ('/scan', scan_topic),
-        ],
+        }.items(),
     )
 
     return LaunchDescription([
+        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
+        DeclareLaunchArgument(
+            'use_safety_node',
+            default_value='true',
+            description='Launch the obstacle safety node on the robot computer.'
+        ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
             default_value='0.50',
@@ -83,10 +95,5 @@ def generate_launch_description():
             default_value='0.34',
             description='Distance from lidar centerline to the robot side edge in meters.'
         ),
-        DeclareLaunchArgument(
-            'scan_topic',
-            default_value='/scan_filtered',
-            description='LaserScan topic consumed by the safety node.'
-        ),
-        safety_node,
+        robot_base,
     ])

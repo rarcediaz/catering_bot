@@ -1,7 +1,6 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String 
 import pygame
 import sys
 import math
@@ -12,17 +11,7 @@ class XboxMover(Node):
     def __init__(self):
         super().__init__('xbox_teleop_node')
 
-        # 1. Initialize Mode (Default to STOP for safety)
-        self.current_mode = "MANUAL"
-
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel_joy', 10)
-
-        # 2. Subscribe to the mode topic from Mission Control
-        self.mode_sub = self.create_subscription(
-            String,
-            '/robot_state/mode',
-            self.mode_callback,
-            10)
 
         # Initialize Pygame
         pygame.init()
@@ -54,14 +43,6 @@ class XboxMover(Node):
         self.timer = self.create_timer(0.02, self.update_and_publish)
 
         self.get_logger().info(f"--- XBOX CONTROL ACTIVE: {self.joy.get_name()} ---")
-        self.get_logger().info("Status: Defaulting to STOP mode until MANUAL selected.")
-
-    def mode_callback(self, msg: String):
-        """Updates the internal mode whenever a new message is received."""
-        new_mode = msg.data.strip().upper()
-        if new_mode != self.current_mode:
-            self.get_logger().info(f"Mode changed from {self.current_mode} to {new_mode}")
-            self.current_mode = new_mode
 
     def _ramp_towards(self, current, target, max_delta):
         if target > current:
@@ -92,13 +73,6 @@ class XboxMover(Node):
 
         msg = Twist()
 
-        # Only publish joystick commands while MANUAL is the active mode.
-        if self.current_mode != "MANUAL":
-            self.current_linear = 0.0
-            self.current_angular = 0.0
-            return
-
-        # --- Everything below only runs if mode is MANUAL ---
         raw_angular = -self.joy.get_axis(0)
         raw_linear = -self.joy.get_axis(1)
 

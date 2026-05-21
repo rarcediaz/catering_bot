@@ -16,10 +16,7 @@ def generate_launch_description():
 
     package_name = 'my_bot'
     use_joystick = LaunchConfiguration('use_joystick')
-    use_battery_monitor = LaunchConfiguration('use_battery_monitor')
-    use_stop_debug_monitor = LaunchConfiguration('use_stop_debug_monitor')
-    stop_debug_log_path = LaunchConfiguration('stop_debug_log_path')
-    stop_debug_log_hz = LaunchConfiguration('stop_debug_log_hz')
+    use_safety_node = LaunchConfiguration('use_safety_node')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_stop_distance_max_m = LaunchConfiguration('obstacle_stop_distance_max_m')
     obstacle_stop_speed_mps = LaunchConfiguration('obstacle_stop_speed_mps')
@@ -29,7 +26,6 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
-    safety_bypass_mode = LaunchConfiguration('safety_bypass_mode')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -56,7 +52,7 @@ def generate_launch_description():
                 condition=IfCondition(use_joystick)
     )
 
-    battery_monitor = IncludeLaunchDescription(
+    safety_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
                 get_package_share_directory(package_name),
@@ -74,24 +70,8 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
-            'safety_bypass_mode': safety_bypass_mode,
         }.items(),
-        condition=IfCondition(use_battery_monitor)
-    )
-
-    stop_debug_monitor = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory(package_name),
-                'launch',
-                'stop_debug.launch.py'
-            )
-        ),
-        launch_arguments={
-            'log_path': stop_debug_log_path,
-            'log_hz': stop_debug_log_hz,
-        }.items(),
-        condition=IfCondition(use_stop_debug_monitor)
+        condition=IfCondition(use_safety_node)
     )
 
 
@@ -196,24 +176,9 @@ def generate_launch_description():
             description='Launch local joystick teleop on this machine if true.'
         ),
         DeclareLaunchArgument(
-            'use_battery_monitor',
+            'use_safety_node',
             default_value='true',
-            description='Launch the battery and safety monitoring node if true.'
-        ),
-        DeclareLaunchArgument(
-            'use_stop_debug_monitor',
-            default_value='false',
-            description='Launch the stop debug monitor if true.'
-        ),
-        DeclareLaunchArgument(
-            'stop_debug_log_path',
-            default_value='~/stop_debug_log.csv',
-            description='CSV file path for the stop debug monitor.'
-        ),
-        DeclareLaunchArgument(
-            'stop_debug_log_hz',
-            default_value='5.0',
-            description='Stop debug logging frequency in Hz.'
+            description='Launch the obstacle safety node if true.'
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
@@ -260,15 +225,9 @@ def generate_launch_description():
             default_value='0.34',
             description='Distance from lidar centerline to the robot side edge in meters.'
         ),
-        DeclareLaunchArgument(
-            'safety_bypass_mode',
-            default_value='false',
-            description='Run Nav2 with lidar safety enabled without requiring UI STOP/MANUAL/AUTO mode changes.'
-        ),
         rsp,
         joystick,
-        battery_monitor,
-        stop_debug_monitor,
+        safety_node,
         ydlidar,
         scan_filter,
         delayed_controller_manager,

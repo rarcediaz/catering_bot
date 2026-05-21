@@ -41,7 +41,6 @@ install(
   PROGRAMS
     scripts/xbox_controller.py
     scripts/safety_node.py
-    scripts/stop_debug_monitor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
