@@ -15,6 +15,7 @@ def generate_launch_description():
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     scan_topic = LaunchConfiguration('scan_topic')
+    safety_bypass_mode = LaunchConfiguration('safety_bypass_mode')
 
     safety_node = Node(
         package='my_bot',
@@ -31,6 +32,7 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'safety_bypass_mode': safety_bypass_mode,
         }],
         remappings=[
             ('/scan', scan_topic),
@@ -87,6 +89,11 @@ def generate_launch_description():
             'scan_topic',
             default_value='/scan_filtered',
             description='LaserScan topic consumed by the safety node.'
+        ),
+        DeclareLaunchArgument(
+            'safety_bypass_mode',
+            default_value='false',
+            description='Run Nav2 with lidar safety enabled without requiring UI STOP/MANUAL/AUTO mode changes.'
         ),
         safety_node,
     ])

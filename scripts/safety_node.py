@@ -65,8 +65,9 @@ class IntegrityNode(Node):
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.5)
         self.declare_parameter('nav_timeout_sec', 0.5)
+        self.declare_parameter('safety_bypass_mode', False)
 
-        self.obstacle_stop_enabled = bool(self.get_parameter('obstacle_stop_enabled').value)
+        self.obstacle_stop_enabled = self.get_bool_parameter('obstacle_stop_enabled')
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
         self.obstacle_stop_distance_max_m = float(self.get_parameter('obstacle_stop_distance_max_m').value)
         self.obstacle_stop_speed_mps = float(self.get_parameter('obstacle_stop_speed_mps').value)
@@ -79,6 +80,9 @@ class IntegrityNode(Node):
         self.side_stop_start_y_m = float(self.get_parameter('side_stop_start_y_m').value)
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
+        self.safety_bypass_mode = self.get_bool_parameter('safety_bypass_mode')
+        if self.safety_bypass_mode:
+            self.current_mode = "AUTO"
 
         self.closest_forward_clearance = math.inf
         self.closest_left_clearance = math.inf
@@ -137,13 +141,26 @@ class IntegrityNode(Node):
         self.create_timer(1.0, self.publish_battery)
         self.create_timer(1.0, self.broadcast_status)
         self.create_timer(1.0 / self.SAFETY_PUBLISH_HZ, self.publish_safety_hold)
+        if self.safety_bypass_mode:
+            self.send_log("Mode bypass enabled: Nav2 commands use lidar safety without UI mode gating.")
 
     def broadcast_status(self):
         msg = String()
         msg.data = self.current_mode
         self.mode_pub.publish(msg)
 
+    def get_bool_parameter(self, name):
+        value = self.get_parameter(name).value
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'on')
+        return bool(value)
+
     def handle_mode_change(self, msg):
+        if self.safety_bypass_mode:
+            self.current_mode = "AUTO"
+            self.send_log("Mode bypass active; ignoring UI mode command.")
+            return
+
         cmd = msg.data.upper()
         if cmd == "RESET":
             self.safety_lock = False
@@ -261,6 +278,7 @@ class IntegrityNode(Node):
     def nav_cmd_callback(self, msg):
         self.latest_nav_cmd = msg
         self.latest_nav_time = time.monotonic()
+
         if self.current_mode == "AUTO" and not self.safety_lock:
             constrained_cmd = self.apply_motion_constraints(msg, auto_front_stop=True)
             self.nav_gate_pub.publish(constrained_cmd)
@@ -453,7 +471,10 @@ class IntegrityNode(Node):
         
         if latency_ms > self.CRITICAL_LATENCY_MS:
             self.latency_fail_count += 1
-            if self.latency_fail_count >= 3 and self.current_mode != "STOP":
+            if (
+                self.latency_fail_count >= 3 and
+                self.current_mode != "STOP"
+            ):
                 self.trigger_stop(f"Persistent Latency ({latency_ms:.1f}ms)")
         else:
             self.latency_fail_count = 0

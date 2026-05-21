@@ -29,6 +29,7 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
+    safety_bypass_mode = LaunchConfiguration('safety_bypass_mode')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -73,6 +74,7 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'safety_bypass_mode': safety_bypass_mode,
         }.items(),
         condition=IfCondition(use_battery_monitor)
     )
@@ -257,6 +259,11 @@ def generate_launch_description():
             'side_stop_start_y_m',
             default_value='0.34',
             description='Distance from lidar centerline to the robot side edge in meters.'
+        ),
+        DeclareLaunchArgument(
+            'safety_bypass_mode',
+            default_value='false',
+            description='Run Nav2 with lidar safety enabled without requiring UI STOP/MANUAL/AUTO mode changes.'
         ),
         rsp,
         joystick,
