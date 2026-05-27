@@ -26,6 +26,7 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
+    nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -70,6 +71,7 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'nav_stop_hold_sec': nav_stop_hold_sec,
         }.items(),
         condition=IfCondition(use_safety_node)
     )
@@ -224,6 +226,11 @@ def generate_launch_description():
             'side_stop_start_y_m',
             default_value='0.34',
             description='Distance from lidar centerline to the robot side edge in meters.'
+        ),
+        DeclareLaunchArgument(
+            'nav_stop_hold_sec',
+            default_value='0.50',
+            description='High-priority zero-command hold time after Nav2 commands stop.'
         ),
         rsp,
         joystick,

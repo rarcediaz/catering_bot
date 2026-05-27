@@ -27,6 +27,8 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.5)
         self.declare_parameter('nav_timeout_sec', 0.25)
+        self.declare_parameter('nav_stop_hold_sec', 0.5)
+        self.declare_parameter('command_epsilon', 0.005)
 
         self.obstacle_stop_enabled = self.get_bool_parameter('obstacle_stop_enabled')
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
@@ -41,6 +43,8 @@ class ObstacleSafetyNode(Node):
         self.side_stop_start_y_m = float(self.get_parameter('side_stop_start_y_m').value)
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
+        self.nav_stop_hold_sec = float(self.get_parameter('nav_stop_hold_sec').value)
+        self.command_epsilon = float(self.get_parameter('command_epsilon').value)
 
         self.front_obstacle_active = False
         self.left_obstacle_active = False
@@ -57,6 +61,8 @@ class ObstacleSafetyNode(Node):
         self.latest_nav_cmd = Twist()
         self.latest_joy_time = None
         self.latest_nav_time = None
+        self.nav_was_active = False
+        self.nav_stop_hold_until = 0.0
 
         self.front_range_pub = self.create_publisher(
             Float32,
@@ -128,6 +134,16 @@ class ObstacleSafetyNode(Node):
             (time.monotonic() - self.latest_nav_time) <= self.nav_timeout_sec
         )
 
+    def is_twist_nonzero(self, cmd):
+        return (
+            abs(cmd.linear.x) > self.command_epsilon or
+            abs(cmd.linear.y) > self.command_epsilon or
+            abs(cmd.linear.z) > self.command_epsilon or
+            abs(cmd.angular.x) > self.command_epsilon or
+            abs(cmd.angular.y) > self.command_epsilon or
+            abs(cmd.angular.z) > self.command_epsilon
+        )
+
     def get_active_command(self):
         if self.is_joy_active():
             return self.latest_joy_cmd
@@ -194,8 +210,20 @@ class ObstacleSafetyNode(Node):
         return limited
 
     def publish_safety_hold(self):
-        if not self.is_nav_active():
+        now = time.monotonic()
+        nav_active = self.is_nav_active()
+
+        if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):
+            self.nav_was_active = True
+        elif self.nav_was_active:
+            self.nav_was_active = False
+            self.nav_stop_hold_until = now + self.nav_stop_hold_sec
+
+        if not nav_active:
             self.nav_gate_pub.publish(Twist())
+
+        if now < self.nav_stop_hold_until:
+            self.safety_cmd_pub.publish(Twist())
 
         active_cmd = self.get_active_command()
         if active_cmd is None:

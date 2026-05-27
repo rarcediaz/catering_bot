@@ -14,6 +14,7 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
+    nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
     scan_topic = LaunchConfiguration('scan_topic')
 
     safety_node = Node(
@@ -31,6 +32,7 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'nav_stop_hold_sec': nav_stop_hold_sec,
         }],
         remappings=[
             ('/scan', scan_topic),
@@ -87,6 +89,11 @@ def generate_launch_description():
             'scan_topic',
             default_value='/scan_filtered',
             description='LaserScan topic consumed by the safety node.'
+        ),
+        DeclareLaunchArgument(
+            'nav_stop_hold_sec',
+            default_value='0.50',
+            description='High-priority zero-command hold time after Nav2 commands stop.'
         ),
         safety_node,
     ])
