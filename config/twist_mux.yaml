@@ -7,9 +7,9 @@ twist_mux:
         priority: 255
       joystick:
         topic: /cmd_vel_joy
-        timeout: 0.2
+        timeout: 0.1
         priority: 100
       navigation:
         topic: /cmd_vel_nav
-        timeout: 0.2
+        timeout: 0.1
         priority: 10

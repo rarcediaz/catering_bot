@@ -137,8 +137,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::StoppedGoalChecker"
-      trans_stopped_velocity: 0.02
-      rot_stopped_velocity: 0.02
+      trans_stopped_velocity: 0.06
+      rot_stopped_velocity: 0.06
       xy_goal_tolerance: 0.45
       yaw_goal_tolerance: 3.14
     # DWB parameters
