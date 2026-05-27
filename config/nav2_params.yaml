@@ -114,6 +114,7 @@ controller_server:
     use_sim_time: False
     enable_stamped_cmd_vel: false
     controller_frequency: 10.0
+    publish_zero_velocity: true
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -135,7 +136,9 @@ controller_server:
     #  stateful: True
     general_goal_checker:
       stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
+      plugin: "nav2_controller::StoppedGoalChecker"
+      trans_stopped_velocity: 0.02
+      rot_stopped_velocity: 0.02
       xy_goal_tolerance: 0.45
       yaw_goal_tolerance: 3.14
     # DWB parameters
@@ -345,12 +348,12 @@ velocity_smoother:
     enable_stamped_cmd_vel: false
     smoothing_frequency: 10.0
     scale_velocities: False
-    feedback: "OPEN_LOOP"
+    feedback: "CLOSED_LOOP"
     max_velocity: [0.70, 0.0, 0.45]
     min_velocity: [-0.70, 0.0, -0.45]
     max_accel: [0.35, 0.0, 0.35]
-    max_decel: [-0.50, 0.0, -0.45]
+    max_decel: [-1.00, 0.0, -0.80]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0
+    velocity_timeout: 0.2
