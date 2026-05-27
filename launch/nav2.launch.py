@@ -19,6 +19,7 @@ def generate_launch_description():
     )
 
     nav2 = GroupAction([
+        SetRemap(src='cmd_vel_nav', dst='cmd_vel_nav_internal'),
         SetRemap(src='cmd_vel_smoothed', dst='cmd_vel_nav_raw'),
         SetRemap(src='smoothed_cmd_vel', dst='cmd_vel_nav_raw'),
         IncludeLaunchDescription(

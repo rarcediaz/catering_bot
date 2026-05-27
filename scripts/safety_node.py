@@ -90,7 +90,7 @@ class ObstacleSafetyNode(Node):
             10
         )
         self.log_pub = self.create_publisher(String, '/robot_health/log', 10)
-        self.nav_gate_pub = self.create_publisher(Twist, '/cmd_vel_nav', 10)
+        self.nav_gate_pub = self.create_publisher(Twist, '/cmd_vel_nav_safe', 10)
         self.safety_cmd_pub = self.create_publisher(Twist, '/cmd_vel_safety', 10)
 
         self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
