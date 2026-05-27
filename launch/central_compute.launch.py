@@ -69,7 +69,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_joystick',
-            default_value='true',
+            default_value='false',
             description='Launch joystick teleop on the central computer.'
         ),
         DeclareLaunchArgument(
