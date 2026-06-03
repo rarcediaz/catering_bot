@@ -41,6 +41,7 @@ install(
   PROGRAMS
     scripts/xbox_controller.py
     scripts/safety_node.py
+    scripts/heartbeat_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

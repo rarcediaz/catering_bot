@@ -16,6 +16,9 @@ def generate_launch_description():
 
     package_name = 'my_bot'
     use_joystick = LaunchConfiguration('use_joystick')
+    use_heartbeat = LaunchConfiguration('use_heartbeat')
+    robot_id = LaunchConfiguration('robot_id')
+    mission_control_url = LaunchConfiguration('mission_control_url')
     use_safety_node = LaunchConfiguration('use_safety_node')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_stop_distance_max_m = LaunchConfiguration('obstacle_stop_distance_max_m')
@@ -170,12 +173,40 @@ def generate_launch_description():
         ]
     )
 
+    heartbeat = Node(
+        package=package_name,
+        executable='heartbeat_node.py',
+        output='screen',
+        parameters=[
+            {
+                'robot_id': robot_id,
+                'server_url': mission_control_url,
+            }
+        ],
+        condition=IfCondition(use_heartbeat)
+    )
+
     return LaunchDescription([
         SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
         DeclareLaunchArgument(
             'use_joystick',
             default_value='false',
             description='Launch local joystick teleop on this machine if true.'
+        ),
+        DeclareLaunchArgument(
+            'use_heartbeat',
+            default_value='true',
+            description='Send periodic robot telemetry to the mission control server.'
+        ),
+        DeclareLaunchArgument(
+            'robot_id',
+            default_value='IntelliTrolley-01',
+            description='Stable robot identity shown in Mission Control.'
+        ),
+        DeclareLaunchArgument(
+            'mission_control_url',
+            default_value='http://127.0.0.1:8000',
+            description='Mission Control server base URL used by the heartbeat node.'
         ),
         DeclareLaunchArgument(
             'use_safety_node',
@@ -241,4 +272,5 @@ def generate_launch_description():
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner,
         twist_mux,
+        heartbeat,
     ])
