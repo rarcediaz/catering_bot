@@ -235,12 +235,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
-            default_value='0.0508',
+            default_value='0.09',
             description='Distance from lidar to the robot front edge in meters.'
         ),
         DeclareLaunchArgument(
             'rear_stop_start_x_m',
-            default_value='1.016',
+            default_value='0.91',
             description='Distance from lidar to the robot rear edge in meters.'
         ),
         DeclareLaunchArgument(
