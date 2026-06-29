@@ -113,7 +113,7 @@
     <joint name="left_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="left_wheel"/>
-        <origin xyz="0.05 0.2 -0.13" rpy="-${pi/2} 0 0"/>
+        <origin xyz="0.05 0.2 -0.0538" rpy="-${pi/2} 0 0"/>
         <axis xyz="0 0 1"/>
         <limit effort="5.0" velocity="13.8"/>
     </joint>
@@ -141,7 +141,7 @@
     <joint name="right_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="right_wheel"/>
-        <origin xyz="0.05 -0.2 -0.13" rpy="${pi/2} 0 0"/>
+        <origin xyz="0.05 -0.2 -0.0538" rpy="${pi/2} 0 0"/>
         <axis xyz="0 0 -1"/>
         <limit effort="5.0" velocity="13.8"/>
     </joint>
@@ -168,7 +168,7 @@
     <joint name="caster_wheel_left_joint" type="fixed">
         <parent link="chassis"/>
         <child link="caster_wheel_left"/>
-        <origin xyz="0.98 0.28 -0.16" rpy="0 0 0"/>
+        <origin xyz="0.98 0.28 -0.0665" rpy="0 0 0"/>
     </joint>
 
     <link name="caster_wheel_left">
@@ -200,7 +200,7 @@
     <joint name="caster_wheel_right_joint" type="fixed">
         <parent link="chassis"/>
         <child link="caster_wheel_right"/>
-        <origin xyz="0.98 -0.28 -0.16" rpy="0 0 0"/>
+        <origin xyz="0.98 -0.28 -0.0665" rpy="0 0 0"/>
     </joint>
 
     <link name="caster_wheel_right">
