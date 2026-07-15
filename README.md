@@ -10,8 +10,12 @@ On the Raspberry Pi, build the workspace and install the service once:
 ```bash
 cd /home/zrpi/robot_ws
 colcon build --symlink-install
-./src/my_bot/scripts/install_robot_service.sh
+./src/catering_bot/scripts/install_robot_service.sh
 ```
+
+The installer discovers its actual checkout directory, so it also works when
+the repository folder is named `my_bot` instead of `catering_bot`. The ROS
+package and launch command remain named `my_bot` in either case.
 
 Stop any manually launched robot stack before running the installer. The
 installer is safe to rerun after an update; it replaces the unit and restarts

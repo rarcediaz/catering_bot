@@ -1,6 +1,6 @@
 [Unit]
 Description=My Bot ROS 2 hardware stack
-Documentation=file://@ROBOT_WORKSPACE@/src/my_bot/README.md
+Documentation=file://@ROBOT_PACKAGE_DIR@/README.md
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=0
@@ -18,7 +18,7 @@ Environment=ROS_DOMAIN_ID=0
 Environment=ROS_LOCALHOST_ONLY=0
 Environment=FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 Environment=RCUTILS_COLORIZED_OUTPUT=0
-ExecStart=/usr/bin/bash @ROBOT_WORKSPACE@/src/my_bot/scripts/start_robot_stack.sh
+ExecStart=/usr/bin/bash @ROBOT_PACKAGE_DIR@/scripts/start_robot_stack.sh
 Restart=always
 RestartSec=5
 KillSignal=SIGINT

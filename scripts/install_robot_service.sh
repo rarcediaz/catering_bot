@@ -41,6 +41,7 @@ trap 'rm -f "${tmp_unit}"' EXIT
 sed \
   -e "s|@ROBOT_USER@|${ROBOT_SERVICE_USER}|g" \
   -e "s|@ROBOT_WORKSPACE@|${ROBOT_WORKSPACE}|g" \
+  -e "s|@ROBOT_PACKAGE_DIR@|${PACKAGE_DIR}|g" \
   "${TEMPLATE_PATH}" >"${tmp_unit}"
 
 echo "Installing ${SERVICE_NAME} for ${ROBOT_SERVICE_USER}..."
