@@ -1,0 +1,34 @@
+[Unit]
+Description=My Bot ROS 2 hardware stack
+Documentation=file://@ROBOT_WORKSPACE@/src/my_bot/README.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+ConditionPathExists=@ROBOT_WORKSPACE@/install/setup.bash
+
+[Service]
+Type=simple
+User=@ROBOT_USER@
+Group=@ROBOT_USER@
+SupplementaryGroups=dialout
+WorkingDirectory=@ROBOT_WORKSPACE@
+Environment=HOME=/home/@ROBOT_USER@
+Environment=ROBOT_WORKSPACE=@ROBOT_WORKSPACE@
+Environment=ROS_DOMAIN_ID=0
+Environment=ROS_LOCALHOST_ONLY=0
+Environment=FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+Environment=RCUTILS_COLORIZED_OUTPUT=0
+ExecStart=/usr/bin/bash @ROBOT_WORKSPACE@/src/my_bot/scripts/start_robot_stack.sh
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=30
+LimitRTPRIO=90
+LimitMEMLOCK=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=my-bot-robot
+
+[Install]
+WantedBy=multi-user.target

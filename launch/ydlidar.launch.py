@@ -17,7 +17,9 @@ def generate_launch_description():
         executable='ydlidar_ros2_driver_node',
         name='ydlidar',
         output='screen',
-        parameters=[ydlidar_params]
+        parameters=[ydlidar_params],
+        respawn=True,
+        respawn_delay=3.0,
     )
 
     return LaunchDescription([

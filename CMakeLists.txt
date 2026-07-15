@@ -33,7 +33,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY config description launch maps worlds
+  DIRECTORY config description launch maps systemd worlds
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -42,6 +42,7 @@ install(
     scripts/xbox_controller.py
     scripts/safety_node.py
     scripts/heartbeat_node.py
+    scripts/start_robot_stack.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
