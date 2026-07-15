@@ -7,24 +7,25 @@
             <!-- Wheel Information -->
             <left_joint>left_wheel_joint</left_joint>
             <right_joint>right_wheel_joint</right_joint>
-            <wheel_separation>0.4</wheel_separation>
-            <wheel_radius>0.0762</wheel_radius>
+            <wheel_separation>${wheel_separation}</wheel_separation>
+            <wheel_radius>${wheel_radius}</wheel_radius>
 
 
             <!-- Input -->
-            <topic>cmd_vel</topic>
+            <topic>/cmd_vel</topic>
 
             <!-- Output -->
             <frame_id>odom</frame_id>
             <child_frame_id>base_link</child_frame_id>
-            <odom_topic>odom</odom_topic>            
-            <tf_topic>tf</tf_topic>
+            <odom_topic>/odom</odom_topic>
+            <tf_topic>/tf</tf_topic>
+            <odom_publish_frequency>50</odom_publish_frequency>
 
         </plugin>
 
 
         <plugin name="gz::sim::systems::JointStatePublisher" filename="gz-sim-joint-state-publisher-system">
-            <topic>joint_states</topic>
+            <topic>/joint_states</topic>
             <joint_name>left_wheel_joint</joint_name>
             <joint_name>right_wheel_joint</joint_name>
         </plugin>
