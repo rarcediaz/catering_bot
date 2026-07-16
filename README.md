@@ -29,10 +29,12 @@ controller), then runs:
 ros2 launch my_bot rpi_robot.launch.py use_heartbeat:=false
 ```
 
-After a startup grace period, the wrapper checks that `/scan` and
-`/diff_cont/odom` continue publishing. Three consecutive health-check failures
-cause the complete launch to restart through systemd. The lidar launch also
-respawns its driver after an isolated driver exit.
+After a startup grace period, the wrapper checks that the lidar and motor
+devices remain present. Three consecutive device failures cause the complete
+launch to restart through systemd. The lidar launch also respawns its driver
+after an isolated driver exit. ROS topic probes are disabled by default because
+short ROS graph discovery delays can otherwise cause false restarts; they can
+be enabled with `ROBOT_WATCHDOG_TOPIC_CHECKS=true` for diagnostics.
 
 Useful commands on the Raspberry Pi:
 

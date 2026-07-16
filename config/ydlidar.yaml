@@ -11,7 +11,7 @@ ydlidar:
     intensity: false
     sample_rate: 5
     abnormal_check_count: 4
-    fixed_resolution: true
+    fixed_resolution: false
     reversion: true
     inverted: true
     auto_reconnect: true

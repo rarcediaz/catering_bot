@@ -7,6 +7,7 @@ ROBOT_LIDAR_DEVICE="${ROBOT_LIDAR_DEVICE:-/dev/ttyUSB0}"
 ROBOT_MOTOR_DEVICE="${ROBOT_MOTOR_DEVICE:-/dev/ttyACM0}"
 DEVICE_WAIT_LOG_INTERVAL_S="${DEVICE_WAIT_LOG_INTERVAL_S:-10}"
 ROBOT_WATCHDOG_ENABLED="${ROBOT_WATCHDOG_ENABLED:-true}"
+ROBOT_WATCHDOG_TOPIC_CHECKS="${ROBOT_WATCHDOG_TOPIC_CHECKS:-false}"
 ROBOT_WATCHDOG_STARTUP_GRACE_S="${ROBOT_WATCHDOG_STARTUP_GRACE_S:-30}"
 ROBOT_WATCHDOG_INTERVAL_S="${ROBOT_WATCHDOG_INTERVAL_S:-5}"
 ROBOT_WATCHDOG_FAILURE_LIMIT="${ROBOT_WATCHDOG_FAILURE_LIMIT:-3}"
@@ -116,7 +117,12 @@ handle_shutdown() {
 trap handle_shutdown INT TERM HUP
 
 if [[ "${ROBOT_WATCHDOG_ENABLED}" =~ ^(1|true|yes|on)$ ]]; then
-  echo "Robot watchdog will begin after ${ROBOT_WATCHDOG_STARTUP_GRACE_S}s."
+  echo "Robot device watchdog will begin after ${ROBOT_WATCHDOG_STARTUP_GRACE_S}s."
+  if [[ "${ROBOT_WATCHDOG_TOPIC_CHECKS}" =~ ^(1|true|yes|on)$ ]]; then
+    echo "Robot topic watchdog checks are enabled."
+  else
+    echo "Robot topic watchdog checks are disabled."
+  fi
   for _ in $(seq 1 "${ROBOT_WATCHDOG_STARTUP_GRACE_S}"); do
     if ! kill -0 "${ROS_LAUNCH_PID}" 2>/dev/null; then
       wait "${ROS_LAUNCH_PID}" || exit $?
@@ -136,16 +142,18 @@ if [[ "${ROBOT_WATCHDOG_ENABLED}" =~ ^(1|true|yes|on)$ ]]; then
       echo "Robot watchdog: motor device is unavailable (${ROBOT_MOTOR_DEVICE})." >&2
       health_ok=false
     fi
-    if ! timeout "${ROBOT_WATCHDOG_TOPIC_TIMEOUT_S}" \
-        ros2 topic echo "${ROBOT_SCAN_TOPIC}" --once --qos-reliability best_effort \
-        >/dev/null 2>&1; then
-      echo "Robot watchdog: no lidar message on ${ROBOT_SCAN_TOPIC}." >&2
-      health_ok=false
-    fi
-    if ! timeout "${ROBOT_WATCHDOG_TOPIC_TIMEOUT_S}" \
-        ros2 topic echo "${ROBOT_ODOM_TOPIC}" --once >/dev/null 2>&1; then
-      echo "Robot watchdog: no odometry message on ${ROBOT_ODOM_TOPIC}." >&2
-      health_ok=false
+    if [[ "${ROBOT_WATCHDOG_TOPIC_CHECKS}" =~ ^(1|true|yes|on)$ ]]; then
+      if ! timeout "${ROBOT_WATCHDOG_TOPIC_TIMEOUT_S}" \
+          ros2 topic echo "${ROBOT_SCAN_TOPIC}" --once --qos-reliability best_effort \
+          >/dev/null 2>&1; then
+        echo "Robot watchdog: no lidar message on ${ROBOT_SCAN_TOPIC}." >&2
+        health_ok=false
+      fi
+      if ! timeout "${ROBOT_WATCHDOG_TOPIC_TIMEOUT_S}" \
+          ros2 topic echo "${ROBOT_ODOM_TOPIC}" --once >/dev/null 2>&1; then
+        echo "Robot watchdog: no odometry message on ${ROBOT_ODOM_TOPIC}." >&2
+        health_ok=false
+      fi
     fi
 
     if [[ "${health_ok}" == true ]]; then
