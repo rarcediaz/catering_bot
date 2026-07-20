@@ -45,6 +45,22 @@ sudo systemctl restart my-bot-robot.service
 sudo systemctl stop my-bot-robot.service
 ```
 
+Do not run `rpi_robot.launch.py` manually while the service is active. The
+launch file uses a process lock to reject a second hardware stack before it can
+compete for the Arduino and lidar serial streams. For a manual debug launch:
+
+```bash
+sudo systemctl stop my-bot-robot.service
+source /home/zrpi/robot_ws/install/setup.bash
+ros2 launch my_bot rpi_robot.launch.py
+```
+
+Restore automatic operation afterward with:
+
+```bash
+sudo systemctl start my-bot-robot.service
+```
+
 For developer access from the central computer, use SSH rather than exposing a
 second debug service:
 

@@ -1,13 +1,62 @@
+import fcntl
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    LogInfo,
+    SetEnvironmentVariable,
+)
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
+_hardware_lock_handle = None
+
+
+def acquire_hardware_lock():
+    """Keep systemd and manual launches from sharing the serial devices."""
+    global _hardware_lock_handle
+
+    lock_path = os.environ.get(
+        'MY_BOT_HARDWARE_LOCK_FILE',
+        f'/tmp/my-bot-hardware-{os.getuid()}.lock',
+    )
+    try:
+        lock_handle = open(lock_path, 'a+', encoding='utf-8')
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as exc:
+        try:
+            lock_handle.close()
+        except (NameError, OSError):
+            pass
+        return None, lock_path, exc
+
+    lock_handle.seek(0)
+    lock_handle.truncate()
+    lock_handle.write(f'{os.getpid()}\n')
+    lock_handle.flush()
+    _hardware_lock_handle = lock_handle
+    return lock_handle, lock_path, None
+
+
 def generate_launch_description():
+    _, lock_path, lock_error = acquire_hardware_lock()
+    if lock_error is not None:
+        reason = (
+            'Another RPi hardware stack is already running and owns the robot '
+            f'devices (lock: {lock_path}). If systemd is active, stop it first '
+            'with: sudo systemctl stop my-bot-robot.service'
+        )
+        return LaunchDescription([
+            LogInfo(msg=f'ERROR: {reason} ({lock_error})'),
+            EmitEvent(event=Shutdown(reason=reason)),
+        ])
+
     package_name = 'my_bot'
     robot_id = LaunchConfiguration('robot_id')
     mission_control_url = LaunchConfiguration('mission_control_url')
@@ -65,7 +114,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_heartbeat',
-            default_value='true',
+            default_value='false',
             description='Send periodic robot telemetry to the mission control server.'
         ),
         DeclareLaunchArgument(
