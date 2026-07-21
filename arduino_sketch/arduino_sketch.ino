@@ -32,6 +32,14 @@
 #define RIGHT_ENC_A 11   // PCINT3 on Uno (Port B)
 #define RIGHT_ENC_B 13
 
+// ---------------- Battery monitor ----------------
+// 6S battery positive -> 120k -> A2 -> 24.3k -> common ground.
+// The Arduino ADC uses the 5V supply as its default voltage reference.
+#define BATTERY_SENSE_PIN A2
+#define BATTERY_SAMPLE_COUNT 16
+#define BATTERY_DIVIDER_MULTIPLIER 5.9382716f  // (120k + 24.3k) / 24.3k
+#define ADC_REFERENCE_VOLTAGE 5.0f       // Calibrate against the measured 5V rail
+
 #define ENCODER_CPR   3136L   // Keep synced with your ROS config / real decoding mode
 #define LOOP_INTERVAL 33UL    // ms, chosen to match ros2_control loop_rate ~= 30 Hz
 #define COMMAND_TIMEOUT_MS 200UL
@@ -116,6 +124,24 @@ void readEncoderTicksAtomic(long &left, long &right) {
   left = left_ticks;
   right = right_ticks;
   interrupts();
+}
+
+uint16_t readBatteryMillivolts() {
+  // The 120k/24.3k divider has a relatively high source impedance. Discarding
+  // the first conversion lets the ADC sample-and-hold input settle, and
+  // averaging reduces motor and switching-supply noise without an RC filter.
+  analogRead(BATTERY_SENSE_PIN);
+
+  unsigned long total = 0;
+  for (uint8_t i = 0; i < BATTERY_SAMPLE_COUNT; i++) {
+    total += analogRead(BATTERY_SENSE_PIN);
+  }
+
+  float average_adc = total / (float)BATTERY_SAMPLE_COUNT;
+  float battery_voltage =
+    average_adc * (ADC_REFERENCE_VOLTAGE / 1023.0f) * BATTERY_DIVIDER_MULTIPLIER;
+
+  return (uint16_t)(battery_voltage * 1000.0f + 0.5f);
 }
 
 void armStartupBoost(float previous_target, float new_target, unsigned long now, unsigned long &boost_until_ms) {
@@ -321,6 +347,9 @@ void processCommand(char *s) {
     Serial.print(left_now);
     Serial.print(' ');
     Serial.println(right_now);
+  } else if (s[0] == 'b') {
+    // Battery query response is an integer number of millivolts, e.g. 24750.
+    Serial.println(readBatteryMillivolts());
   } else if (s[0] == 'u') {
     float p = 0.0f, d = 0.0f, i = 0.0f, o = 0.0f;
     if (parsePidCommand(s, p, d, i, o)) {
@@ -397,6 +426,8 @@ void setup() {
   pinMode(LEFT_ENC_B, INPUT_PULLUP);
   pinMode(RIGHT_ENC_A, INPUT_PULLUP);
   pinMode(RIGHT_ENC_B, INPUT_PULLUP);
+
+  pinMode(BATTERY_SENSE_PIN, INPUT);
 
   // Left encoder uses Uno external interrupt pin D3
   attachInterrupt(digitalPinToInterrupt(LEFT_ENC_A), leftEncoderISR, CHANGE);
