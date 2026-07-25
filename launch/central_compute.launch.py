@@ -17,6 +17,10 @@ def generate_launch_description():
     use_nav2 = LaunchConfiguration('use_nav2')
     use_rviz = LaunchConfiguration('use_rviz')
     map_file = LaunchConfiguration('map')
+    keepout_mask_file = LaunchConfiguration('keepout_mask')
+    display_map_file = LaunchConfiguration('display_map')
+    use_keepout = LaunchConfiguration('use_keepout')
+    use_display_map = LaunchConfiguration('use_display_map')
 
     package_share = get_package_share_directory(package_name)
 
@@ -47,6 +51,10 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'map': map_file,
+            'use_keepout': use_keepout,
+            'keepout_mask': keepout_mask_file,
+            'use_display_map': use_display_map,
+            'display_map': display_map_file,
         }.items(),
         condition=IfCondition(use_nav2),
     )
@@ -58,7 +66,9 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    default_map = os.path.join(package_share, 'maps', 'test_map1.yaml')
+    default_map = os.path.join(package_share, 'maps', 'atrium_navigation.yaml')
+    default_keepout_mask = os.path.join(package_share, 'maps', 'atrium_keepout.yaml')
+    default_display_map = os.path.join(package_share, 'maps', 'atrium_display.yaml')
 
     return LaunchDescription([
         SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
@@ -90,7 +100,27 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'map',
             default_value=default_map,
-            description='Full path to the saved map YAML file used when use_nav2 is true.'
+            description='Full path to the navigation map YAML file used when use_nav2 is true.'
+        ),
+        DeclareLaunchArgument(
+            'use_keepout',
+            default_value='true',
+            description='Apply the keepout mask while navigating.'
+        ),
+        DeclareLaunchArgument(
+            'keepout_mask',
+            default_value=default_keepout_mask,
+            description='Full path to the keepout mask YAML file.'
+        ),
+        DeclareLaunchArgument(
+            'use_display_map',
+            default_value='true',
+            description='Publish the UI-only display map on /display_map.'
+        ),
+        DeclareLaunchArgument(
+            'display_map',
+            default_value=default_display_map,
+            description='Full path to the UI display map YAML file.'
         ),
         joystick,
         slam,

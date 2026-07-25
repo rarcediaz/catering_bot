@@ -150,6 +150,19 @@ def generate_launch_description():
         'scan_filter.yaml'
     )
 
+    # The YDLidar driver publishes both -pi and +pi as readings. Those are the
+    # same ray, and Karto otherwise registers this as a non-360-degree laser.
+    scan_canonicalizer = Node(
+        package=package_name,
+        executable='scan_canonicalizer.py',
+        name='scan_canonicalizer',
+        output='screen',
+        remappings=[
+            ('scan', '/scan'),
+            ('scan_canonical', '/scan_canonical'),
+        ]
+    )
+
     scan_filter = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
@@ -157,7 +170,7 @@ def generate_launch_description():
         output='screen',
         parameters=[scan_filter_config],
         remappings=[
-            ('scan', '/scan'),
+            ('scan', '/scan_canonical'),
             ('scan_filtered', '/scan_filtered'),
         ]
     )
@@ -267,6 +280,7 @@ def generate_launch_description():
         joystick,
         safety_node,
         ydlidar,
+        scan_canonicalizer,
         scan_filter,
         delayed_controller_manager,
         delayed_diff_drive_spawner,

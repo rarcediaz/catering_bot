@@ -33,6 +33,10 @@
   <exec_depend>diffdrive_arduino</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_costmap_2d</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>laser_filters</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>

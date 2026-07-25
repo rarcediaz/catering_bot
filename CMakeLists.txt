@@ -41,6 +41,7 @@ install(
   PROGRAMS
     scripts/xbox_controller.py
     scripts/safety_node.py
+    scripts/scan_canonicalizer.py
     scripts/heartbeat_node.py
     scripts/start_robot_stack.sh
   DESTINATION lib/${PROJECT_NAME}
