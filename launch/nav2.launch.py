@@ -18,11 +18,12 @@ def generate_launch_description():
     display_map_file = LaunchConfiguration('display_map')
     use_keepout = LaunchConfiguration('use_keepout')
     use_display_map = LaunchConfiguration('use_display_map')
-    params_file = os.path.join(
+    default_params_file = os.path.join(
         get_package_share_directory(package_name),
         'config',
         'nav2_params.yaml'
     )
+    params_file = LaunchConfiguration('params_file')
     configured_params = RewrittenYaml(
         source_file=params_file,
         param_rewrites={
@@ -158,6 +159,11 @@ def generate_launch_description():
             'display_map',
             default_value='',
             description='Full path to the UI display map YAML file.'
+        ),
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params_file,
+            description='Full path to the Nav2 parameter YAML file.'
         ),
         keepout_servers,
         display_server,

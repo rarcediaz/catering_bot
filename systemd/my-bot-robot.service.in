@@ -1,5 +1,5 @@
 [Unit]
-Description=My Bot ROS 2 hardware stack
+Description=My Bot ROS 2 autonomous robot stack
 Documentation=file://@ROBOT_PACKAGE_DIR@/README.md
 Wants=network-online.target
 After=network-online.target
@@ -14,6 +14,7 @@ SupplementaryGroups=dialout
 WorkingDirectory=@ROBOT_WORKSPACE@
 Environment=HOME=/home/@ROBOT_USER@
 Environment=ROBOT_WORKSPACE=@ROBOT_WORKSPACE@
+Environment=ROBOT_LAUNCH_FILE=rpi_autonomy.launch.py
 Environment=ROS_DOMAIN_ID=0
 Environment=ROS_LOCALHOST_ONLY=0
 Environment=FASTDDS_BUILTIN_TRANSPORTS=UDPv4
@@ -24,6 +25,7 @@ RestartSec=5
 KillSignal=SIGINT
 KillMode=control-group
 TimeoutStopSec=30
+CPUWeight=200
 LimitRTPRIO=90
 LimitMEMLOCK=infinity
 StandardOutput=journal

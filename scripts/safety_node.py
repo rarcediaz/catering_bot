@@ -29,6 +29,7 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('nav_timeout_sec', 0.25)
         self.declare_parameter('nav_stop_hold_sec', 0.5)
         self.declare_parameter('command_epsilon', 0.005)
+        self.declare_parameter('power_command_topic', '/robot/power_command')
 
         self.obstacle_stop_enabled = self.get_bool_parameter('obstacle_stop_enabled')
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
@@ -45,6 +46,7 @@ class ObstacleSafetyNode(Node):
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
         self.nav_stop_hold_sec = float(self.get_parameter('nav_stop_hold_sec').value)
         self.command_epsilon = float(self.get_parameter('command_epsilon').value)
+        self.power_command_topic = str(self.get_parameter('power_command_topic').value)
 
         self.front_obstacle_active = False
         self.left_obstacle_active = False
@@ -63,6 +65,7 @@ class ObstacleSafetyNode(Node):
         self.latest_nav_time = None
         self.nav_was_active = False
         self.nav_stop_hold_until = 0.0
+        self.operator_stop_latched = False
 
         self.front_range_pub = self.create_publisher(
             Float32,
@@ -89,6 +92,11 @@ class ObstacleSafetyNode(Node):
             '/robot_health/front_speed_limit_scale',
             10
         )
+        self.operator_stop_pub = self.create_publisher(
+            Bool,
+            '/robot_health/operator_stop_active',
+            10
+        )
         self.log_pub = self.create_publisher(String, '/robot_health/log', 10)
         self.nav_gate_pub = self.create_publisher(Twist, '/cmd_vel_nav_safe', 10)
         self.safety_cmd_pub = self.create_publisher(Twist, '/cmd_vel_safety', 10)
@@ -97,6 +105,7 @@ class ObstacleSafetyNode(Node):
         self.create_subscription(Odometry, '/diff_cont/odom', self.odom_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_joy', self.joy_cmd_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_nav_raw', self.nav_cmd_callback, 10)
+        self.create_subscription(String, self.power_command_topic, self.power_command_callback, 10)
 
         self.create_timer(0.05, self.publish_safety_hold)
         self.send_log('Obstacle safety node active.')
@@ -145,6 +154,8 @@ class ObstacleSafetyNode(Node):
         )
 
     def get_active_command(self):
+        if self.operator_stop_latched:
+            return None
         if self.is_joy_active():
             return self.latest_joy_cmd
         if self.is_nav_active():
@@ -158,7 +169,30 @@ class ObstacleSafetyNode(Node):
     def nav_cmd_callback(self, msg):
         self.latest_nav_cmd = msg
         self.latest_nav_time = time.monotonic()
+        if self.operator_stop_latched:
+            self.nav_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+            return
         self.nav_gate_pub.publish(self.apply_motion_constraints(msg))
+
+    def power_command_callback(self, msg):
+        command = str(msg.data).strip().upper()
+        if command in ('STOP', 'OFF'):
+            if not self.operator_stop_latched:
+                self.send_log(
+                    'Operator safety stop latched. Motion is blocked until Robot On / Reset.',
+                    is_crit=True,
+                )
+            self.operator_stop_latched = True
+            self.latest_joy_time = None
+            self.latest_nav_time = None
+            self.nav_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+        elif command in ('RESET', 'ON', 'AUTO', 'MANUAL'):
+            if self.operator_stop_latched:
+                self.send_log('Operator safety stop cleared.')
+            self.operator_stop_latched = False
+        self.operator_stop_pub.publish(Bool(data=self.operator_stop_latched))
 
     def odom_callback(self, msg):
         self.forward_speed_mps = msg.twist.twist.linear.x
@@ -191,6 +225,8 @@ class ObstacleSafetyNode(Node):
         )
 
     def apply_motion_constraints(self, cmd):
+        if self.operator_stop_latched:
+            return Twist()
         limited = self.copy_twist(cmd)
 
         if self.front_obstacle_active and limited.linear.x > 0.0:
@@ -211,6 +247,13 @@ class ObstacleSafetyNode(Node):
 
     def publish_safety_hold(self):
         now = time.monotonic()
+        self.operator_stop_pub.publish(Bool(data=self.operator_stop_latched))
+        if self.operator_stop_latched:
+            self.nav_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+            self.speed_limit_scale_pub.publish(Float32(data=0.0))
+            return
+
         nav_active = self.is_nav_active()
 
         if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):

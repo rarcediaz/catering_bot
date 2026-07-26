@@ -10,6 +10,33 @@ SERVICE_NAME="my-bot-robot.service"
 TEMPLATE_PATH="${PACKAGE_DIR}/systemd/${SERVICE_NAME}.in"
 SYSTEMD_PATH="/etc/systemd/system/${SERVICE_NAME}"
 
+source_relaxed() {
+  set +u
+  # shellcheck disable=SC1090
+  source "$1"
+  set -u
+}
+
+find_ros_setup() {
+  if [[ -n "${ROS_SETUP_FILE:-}" && -f "${ROS_SETUP_FILE}" ]]; then
+    printf '%s\n' "${ROS_SETUP_FILE}"
+    return
+  fi
+  if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
+    printf '%s\n' "/opt/ros/${ROS_DISTRO}/setup.bash"
+    return
+  fi
+  if [[ -f /opt/ros/humble/setup.bash ]]; then
+    printf '%s\n' /opt/ros/humble/setup.bash
+    return
+  fi
+  if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+    printf '%s\n' /opt/ros/jazzy/setup.bash
+    return
+  fi
+  return 1
+}
+
 if [[ "${ROBOT_SERVICE_USER}" == "root" ]]; then
   cat >&2 <<'EOF'
 Run this installer as the normal robot user, not with sudo.
@@ -35,6 +62,32 @@ if [[ ! -f "${TEMPLATE_PATH}" ]]; then
   exit 1
 fi
 
+if ! ROS_SETUP_FILE="$(find_ros_setup)"; then
+  echo "No ROS 2 setup file was found. Set ROS_SETUP_FILE or ROS_DISTRO." >&2
+  exit 1
+fi
+source_relaxed "${ROS_SETUP_FILE}"
+source_relaxed "${ROBOT_WORKSPACE}/install/setup.bash"
+
+missing_packages=()
+for ros_package in nav2_bringup nav2_map_server nav2_lifecycle_manager twist_mux laser_filters; do
+  if ! ros2 pkg prefix "${ros_package}" >/dev/null 2>&1; then
+    missing_packages+=("${ros_package}")
+  fi
+done
+if (( ${#missing_packages[@]} > 0 )); then
+  cat >&2 <<EOF
+The Pi is missing required autonomy packages:
+  ${missing_packages[*]}
+
+Install workspace dependencies, rebuild, and rerun this installer:
+  cd ${ROBOT_WORKSPACE}
+  rosdep install --from-paths src --ignore-src -r -y
+  colcon build --symlink-install
+EOF
+  exit 1
+fi
+
 tmp_unit="$(mktemp)"
 trap 'rm -f "${tmp_unit}"' EXIT
 
@@ -53,7 +106,7 @@ sudo systemctl restart "${SERVICE_NAME}"
 
 cat <<EOF
 
-Robot service installed and started.
+Autonomous robot service installed and started.
 
 Status:
   sudo systemctl status ${SERVICE_NAME} --no-pager
@@ -61,5 +114,5 @@ Status:
 Live developer logs:
   sudo journalctl -u ${SERVICE_NAME} -f -o cat
 
-The service will start automatically on future boots.
+The service will start hardware, safety, Nav2, AMCL, and maps automatically on future boots.
 EOF

@@ -1,14 +1,16 @@
 # My Bot
 
-## Start the physical robot automatically at boot
+## Run the autonomous robot on the Raspberry Pi
 
-The Raspberry Pi service starts only the hardware-facing robot stack. Nav2,
-AMCL, mapping, and Mission Control belong on the central computer.
+The Raspberry Pi service owns the robot-critical stack: hardware, lidar,
+odometry, robot TF, obstacle safety, Nav2, AMCL, and the map layers. Mission
+Control runs as a second Pi service, while the laptop only needs a browser.
 
 On the Raspberry Pi, build the workspace and install the service once:
 
 ```bash
 cd /home/zrpi/robot_ws
+rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 ./src/catering_bot/scripts/install_robot_service.sh
 ```
@@ -26,7 +28,7 @@ boot, the service waits for `/dev/ttyUSB0` (lidar) and `/dev/ttyACM0` (motor
 controller), then runs:
 
 ```bash
-ros2 launch my_bot rpi_robot.launch.py use_heartbeat:=false
+ros2 launch my_bot rpi_autonomy.launch.py use_heartbeat:=false
 ```
 
 After a startup grace period, the wrapper checks that the lidar and motor
@@ -45,15 +47,19 @@ sudo systemctl restart my-bot-robot.service
 sudo systemctl stop my-bot-robot.service
 ```
 
-Do not run `rpi_robot.launch.py` manually while the service is active. The
-launch file uses a process lock to reject a second hardware stack before it can
-compete for the Arduino and lidar serial streams. For a manual debug launch:
+Do not run another robot launch manually while the service is active. The
+hardware launch uses a process lock to reject a second stack before it can
+compete for the Arduino and lidar serial streams. For a manual full-stack
+debug launch:
 
 ```bash
 sudo systemctl stop my-bot-robot.service
 source /home/zrpi/robot_ws/install/setup.bash
-ros2 launch my_bot rpi_robot.launch.py
+ros2 launch my_bot rpi_autonomy.launch.py
 ```
+
+For hardware-only diagnostics, use `rpi_robot.launch.py`. The original
+central-compute mode remains available as a fallback during migration.
 
 Restore automatic operation afterward with:
 
@@ -75,8 +81,10 @@ The robot does not expose its logs through the Mission Control API.
 The wrapper automatically detects ROS 2 Humble or Jazzy. Deployment settings
 can be overridden with `sudo systemctl edit my-bot-robot.service`; supported
 variables include `ROS_DOMAIN_ID`, `ROS_SETUP_FILE`, `ROBOT_WORKSPACE`,
-`ROBOT_LIDAR_DEVICE`, `ROBOT_MOTOR_DEVICE`, and the `ROBOT_WATCHDOG_*`
-settings. After an override, restart the service:
+`ROBOT_LAUNCH_FILE`, `ROBOT_LIDAR_DEVICE`, `ROBOT_MOTOR_DEVICE`, and the
+`ROBOT_WATCHDOG_*` settings. Set
+`ROBOT_LAUNCH_FILE=rpi_robot.launch.py` to temporarily restore the old
+hardware-only profile. After an override, restart the service:
 
 ```bash
 sudo systemctl daemon-reload
@@ -86,3 +94,14 @@ sudo systemctl restart my-bot-robot.service
 For more reliable hardware naming, replace `/dev/ttyUSB0` and `/dev/ttyACM0`
 with stable `/dev/serial/by-id/...` paths in both the service overrides and the
 matching ROS configuration.
+
+## Stop behavior
+
+**Stop Navigation** cancels only the current Nav2 goal. **Safety Stop**
+publishes `STOP` on `/robot/power_command`; the Pi safety node then holds zero
+velocity continuously at the highest twist-mux priority. This latch survives a
+browser disconnect or Mission Control restart and clears only after **Robot
+On** or another reset command.
+
+Software stops supplement, but do not replace, a physical emergency-stop
+circuit.
