@@ -43,6 +43,7 @@ install(
     scripts/safety_node.py
     scripts/scan_canonicalizer.py
     scripts/heartbeat_node.py
+    scripts/nav2_startup_gate.py
     scripts/start_robot_stack.sh
   DESTINATION lib/${PROJECT_NAME}
 )

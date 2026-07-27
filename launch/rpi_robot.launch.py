@@ -58,6 +58,8 @@ def generate_launch_description():
         ])
 
     package_name = 'my_bot'
+    package_share = get_package_share_directory(package_name)
+    cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
     robot_id = LaunchConfiguration('robot_id')
     mission_control_url = LaunchConfiguration('mission_control_url')
     use_heartbeat = LaunchConfiguration('use_heartbeat')
@@ -101,7 +103,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
+        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
         DeclareLaunchArgument(
             'robot_id',
             default_value='IntelliTrolley-01',

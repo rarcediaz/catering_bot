@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS
+  xmlns="https://cdds.io/config"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface
+          autodetermine="true"
+          priority="default"
+          multicast="false"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+      <Transport>udp</Transport>
+    </General>
+    <Discovery>
+      <Peers>
+        <Peer Address="rodrigo-linux-laptop.local"/>
+        <Peer Address="zrpi-desktop.local"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>50</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

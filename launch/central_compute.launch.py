@@ -23,6 +23,7 @@ def generate_launch_description():
     use_display_map = LaunchConfiguration('use_display_map')
 
     package_share = get_package_share_directory(package_name)
+    cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
 
     joystick = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -71,7 +72,8 @@ def generate_launch_description():
     default_display_map = os.path.join(package_share, 'maps', 'atrium_display.yaml')
 
     return LaunchDescription([
-        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
+        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',

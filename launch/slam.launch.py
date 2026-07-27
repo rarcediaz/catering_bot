@@ -9,9 +9,11 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     package_name = 'my_bot'
+    package_share = get_package_share_directory(package_name)
+    cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
     use_sim_time = LaunchConfiguration('use_sim_time')
     slam_params = os.path.join(
-        get_package_share_directory(package_name),
+        package_share,
         'config',
         'mapper_params_online_async.yaml'
     )
@@ -25,7 +27,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
+        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',

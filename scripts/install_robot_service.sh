@@ -69,8 +69,31 @@ fi
 source_relaxed "${ROS_SETUP_FILE}"
 source_relaxed "${ROBOT_WORKSPACE}/install/setup.bash"
 
+missing_commands=()
+for required_command in fuser setsid; do
+  if ! command -v "${required_command}" >/dev/null 2>&1; then
+    missing_commands+=("${required_command}")
+  fi
+done
+if (( ${#missing_commands[@]} > 0 )); then
+  cat >&2 <<EOF
+The Pi is missing service process-control commands:
+  ${missing_commands[*]}
+
+Install them and rerun this installer:
+  sudo apt install psmisc util-linux
+EOF
+  exit 1
+fi
+
 missing_packages=()
-for ros_package in nav2_bringup nav2_map_server nav2_lifecycle_manager twist_mux laser_filters; do
+for ros_package in \
+  nav2_bringup \
+  nav2_map_server \
+  nav2_lifecycle_manager \
+  twist_mux \
+  laser_filters \
+  rmw_cyclonedds_cpp; do
   if ! ros2 pkg prefix "${ros_package}" >/dev/null 2>&1; then
     missing_packages+=("${ros_package}")
   fi

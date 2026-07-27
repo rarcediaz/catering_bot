@@ -14,7 +14,11 @@ ROBOT_WATCHDOG_FAILURE_LIMIT="${ROBOT_WATCHDOG_FAILURE_LIMIT:-3}"
 ROBOT_WATCHDOG_TOPIC_TIMEOUT_S="${ROBOT_WATCHDOG_TOPIC_TIMEOUT_S:-4}"
 ROBOT_SCAN_TOPIC="${ROBOT_SCAN_TOPIC:-/scan}"
 ROBOT_ODOM_TOPIC="${ROBOT_ODOM_TOPIC:-/diff_cont/odom}"
+ROBOT_CLEAN_START="${ROBOT_CLEAN_START:-true}"
 ROS_LAUNCH_PID=""
+
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+export CYCLONEDDS_URI="${CYCLONEDDS_URI:-file://${ROBOT_WORKSPACE}/install/my_bot/share/my_bot/config/cyclonedds.xml}"
 
 find_ros_setup() {
   if [[ -n "${ROS_SETUP_FILE:-}" && -f "${ROS_SETUP_FILE}" ]]; then
@@ -56,6 +60,122 @@ fi
 source_relaxed "${ROS_SETUP_FILE}"
 source_relaxed "${ROBOT_WORKSPACE}/install/setup.bash"
 
+collect_stale_robot_pids() {
+  ps -eo pid=,comm=,args= | awk -v workspace="${ROBOT_WORKSPACE}" -v current_pid="$$" '
+    {
+      pid = $1
+      process_name = $2
+      command = substr($0, index($0, $3))
+      if (pid == current_pid || process_name == "awk" || process_name == "ps") {
+        next
+      }
+      if (
+        command ~ /ros2 launch my_bot rpi_(autonomy|robot)\.launch\.py/ ||
+        index(command, workspace "/install/my_bot/lib/my_bot/") > 0 ||
+        index(command, workspace "/install/ydlidar_ros2_driver/") > 0 ||
+        command ~ /\/lib\/controller_manager\/ros2_control_node/ ||
+        command ~ /\/lib\/robot_state_publisher\/robot_state_publisher/ ||
+        command ~ /\/lib\/laser_filters\/scan_to_scan_filter_chain/ ||
+        command ~ /\/lib\/twist_mux\/twist_mux/ ||
+        command ~ /\/lib\/nav2_[^/]+\// ||
+        (
+          command ~ /\/lib\/rclcpp_components\/component_container/ &&
+          command ~ /__node:=nav2_container/
+        )
+      ) {
+        print pid
+      }
+    }
+  '
+}
+
+collect_device_owner_pids() {
+  local device
+  for device in "${ROBOT_LIDAR_DEVICE}" "${ROBOT_MOTOR_DEVICE}"; do
+    if [[ -e "${device}" ]]; then
+      fuser "${device}" 2>/dev/null || true
+    fi
+  done | tr ' ' '\n' | awk '/^[0-9]+$/' | sort -nu
+}
+
+signal_pid_list() {
+  local signal_name="$1"
+  shift
+  if (( $# == 0 )); then
+    return
+  fi
+  kill "-${signal_name}" "$@" 2>/dev/null || true
+}
+
+wait_for_pid_list() {
+  local attempts="$1"
+  shift
+  local pid
+  local any_alive
+  for _ in $(seq 1 "${attempts}"); do
+    any_alive=false
+    for pid in "$@"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        any_alive=true
+        break
+      fi
+    done
+    if [[ "${any_alive}" == false ]]; then
+      return
+    fi
+    sleep 0.5
+  done
+}
+
+clean_stale_robot_stack() {
+  if [[ ! "${ROBOT_CLEAN_START}" =~ ^(1|true|yes|on)$ ]]; then
+    echo "Robot clean-start sweep is disabled."
+    return
+  fi
+  if ! command -v fuser >/dev/null 2>&1; then
+    echo "Robot clean start requires 'fuser' from the psmisc package." >&2
+    exit 1
+  fi
+
+  local -a stale_pids=()
+  local -a owner_pids=()
+  mapfile -t stale_pids < <(collect_stale_robot_pids)
+  mapfile -t owner_pids < <(collect_device_owner_pids)
+  if (( ${#stale_pids[@]} == 0 && ${#owner_pids[@]} == 0 )); then
+    echo "Robot clean start: no stale processes found."
+    return
+  fi
+
+  echo "Robot clean start: stopping stale robot processes: ${stale_pids[*]:-none}"
+  if (( ${#owner_pids[@]} > 0 )); then
+    echo "Robot clean start: releasing device owners: ${owner_pids[*]}"
+  fi
+  signal_pid_list INT "${stale_pids[@]}"
+  signal_pid_list TERM "${owner_pids[@]}"
+  wait_for_pid_list 8 "${stale_pids[@]}" "${owner_pids[@]}"
+
+  mapfile -t stale_pids < <(collect_stale_robot_pids)
+  mapfile -t owner_pids < <(collect_device_owner_pids)
+  signal_pid_list TERM "${stale_pids[@]}" "${owner_pids[@]}"
+  wait_for_pid_list 6 "${stale_pids[@]}" "${owner_pids[@]}"
+
+  mapfile -t stale_pids < <(collect_stale_robot_pids)
+  mapfile -t owner_pids < <(collect_device_owner_pids)
+  if (( ${#stale_pids[@]} > 0 || ${#owner_pids[@]} > 0 )); then
+    echo "Robot clean start: force-stopping unresponsive processes."
+    signal_pid_list KILL "${stale_pids[@]}" "${owner_pids[@]}"
+    wait_for_pid_list 4 "${stale_pids[@]}" "${owner_pids[@]}"
+  fi
+
+  mapfile -t stale_pids < <(collect_stale_robot_pids)
+  mapfile -t owner_pids < <(collect_device_owner_pids)
+  if (( ${#stale_pids[@]} > 0 || ${#owner_pids[@]} > 0 )); then
+    echo "Robot clean start failed; processes remain: ${stale_pids[*]} ${owner_pids[*]}" >&2
+    exit 1
+  fi
+  echo "Robot clean start: stale processes removed and serial devices released."
+}
+
 for numeric_value in \
   "${DEVICE_WAIT_LOG_INTERVAL_S}" \
   "${ROBOT_WATCHDOG_STARTUP_GRACE_S}" \
@@ -83,11 +203,12 @@ wait_for_device() {
   echo "Robot device ready: ${device}"
 }
 
+clean_stale_robot_stack
 wait_for_device "${ROBOT_LIDAR_DEVICE}"
 wait_for_device "${ROBOT_MOTOR_DEVICE}"
 
 echo "Starting ${ROBOT_LAUNCH_FILE} from ${ROBOT_WORKSPACE} (ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0})."
-ros2 launch my_bot "${ROBOT_LAUNCH_FILE}" use_heartbeat:=false &
+setsid ros2 launch my_bot "${ROBOT_LAUNCH_FILE}" use_heartbeat:=false &
 ROS_LAUNCH_PID=$!
 
 stop_robot_launch() {
@@ -95,7 +216,7 @@ stop_robot_launch() {
     return
   fi
 
-  kill -INT "${ROS_LAUNCH_PID}" 2>/dev/null || true
+  kill -INT -- "-${ROS_LAUNCH_PID}" 2>/dev/null || true
   for _ in $(seq 1 20); do
     if ! kill -0 "${ROS_LAUNCH_PID}" 2>/dev/null; then
       break
@@ -103,7 +224,16 @@ stop_robot_launch() {
     sleep 0.5
   done
   if kill -0 "${ROS_LAUNCH_PID}" 2>/dev/null; then
-    kill -TERM "${ROS_LAUNCH_PID}" 2>/dev/null || true
+    kill -TERM -- "-${ROS_LAUNCH_PID}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 "${ROS_LAUNCH_PID}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.5
+    done
+  fi
+  if kill -0 "${ROS_LAUNCH_PID}" 2>/dev/null; then
+    kill -KILL -- "-${ROS_LAUNCH_PID}" 2>/dev/null || true
   fi
   wait "${ROS_LAUNCH_PID}" 2>/dev/null || true
 }

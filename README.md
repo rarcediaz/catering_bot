@@ -19,13 +19,14 @@ The installer discovers its actual checkout directory, so it also works when
 the repository folder is named `my_bot` instead of `catering_bot`. The ROS
 package and launch command remain named `my_bot` in either case.
 
-Stop any manually launched robot stack before running the installer. The
-installer is safe to rerun after an update; it replaces the unit and restarts
-the managed service.
+The installer is safe to rerun after an update; it replaces the unit and
+restarts the managed service. Every service start performs a clean-start sweep:
+it stops stale robot/Nav2 processes, releases the lidar and motor serial
+devices, and only then launches one new stack in its own process group.
 
 The installer enables and immediately starts `my-bot-robot.service`. On each
-boot, the service waits for `/dev/ttyUSB0` (lidar) and `/dev/ttyACM0` (motor
-controller), then runs:
+boot, the service first clears stale owners, waits for `/dev/ttyUSB0` (lidar)
+and `/dev/ttyACM0` (motor controller), then runs:
 
 ```bash
 ros2 launch my_bot rpi_autonomy.launch.py use_heartbeat:=false
@@ -82,7 +83,8 @@ The wrapper automatically detects ROS 2 Humble or Jazzy. Deployment settings
 can be overridden with `sudo systemctl edit my-bot-robot.service`; supported
 variables include `ROS_DOMAIN_ID`, `ROS_SETUP_FILE`, `ROBOT_WORKSPACE`,
 `ROBOT_LAUNCH_FILE`, `ROBOT_LIDAR_DEVICE`, `ROBOT_MOTOR_DEVICE`, and the
-`ROBOT_WATCHDOG_*` settings. Set
+`ROBOT_WATCHDOG_*` settings. Clean startup is enabled by default with
+`ROBOT_CLEAN_START=true`. Set
 `ROBOT_LAUNCH_FILE=rpi_robot.launch.py` to temporarily restore the old
 hardware-only profile. After an override, restart the service:
 

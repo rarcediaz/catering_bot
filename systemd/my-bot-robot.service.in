@@ -15,9 +15,11 @@ WorkingDirectory=@ROBOT_WORKSPACE@
 Environment=HOME=/home/@ROBOT_USER@
 Environment=ROBOT_WORKSPACE=@ROBOT_WORKSPACE@
 Environment=ROBOT_LAUNCH_FILE=rpi_autonomy.launch.py
+Environment=ROBOT_CLEAN_START=true
 Environment=ROS_DOMAIN_ID=0
 Environment=ROS_LOCALHOST_ONLY=0
-Environment=FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+Environment=CYCLONEDDS_URI=file://@ROBOT_WORKSPACE@/install/my_bot/share/my_bot/config/cyclonedds.xml
 Environment=RCUTILS_COLORIZED_OUTPUT=0
 ExecStart=/usr/bin/bash @ROBOT_PACKAGE_DIR@/scripts/start_robot_stack.sh
 Restart=always

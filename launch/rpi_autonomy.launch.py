@@ -15,6 +15,7 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     package_name = 'my_bot'
     package_share = get_package_share_directory(package_name)
+    cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
 
     robot_id = LaunchConfiguration('robot_id')
     mission_control_url = LaunchConfiguration('mission_control_url')
@@ -25,6 +26,8 @@ def generate_launch_description():
     params_file = LaunchConfiguration('params_file')
     use_keepout = LaunchConfiguration('use_keepout')
     use_display_map = LaunchConfiguration('use_display_map')
+    navigation_use_composition = LaunchConfiguration('navigation_use_composition')
+    isolate_localization = LaunchConfiguration('isolate_localization')
     nav_start_delay_s = LaunchConfiguration('nav_start_delay_s')
 
     robot = IncludeLaunchDescription(
@@ -52,11 +55,14 @@ def generate_launch_description():
             'use_display_map': use_display_map,
             'display_map': display_map_file,
             'params_file': params_file,
+            'navigation_use_composition': navigation_use_composition,
+            'isolate_localization': isolate_localization,
         }.items(),
     )
 
     return LaunchDescription([
-        SetEnvironmentVariable('FASTDDS_BUILTIN_TRANSPORTS', 'UDPv4'),
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
+        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
         DeclareLaunchArgument(
             'robot_id',
             default_value='IntelliTrolley-01',
@@ -104,6 +110,21 @@ def generate_launch_description():
             'use_display_map',
             default_value='true',
             description='Publish the UI-only display map.',
+        ),
+        DeclareLaunchArgument(
+            'navigation_use_composition',
+            default_value='True',
+            description=(
+                'Compose the Pi navigation servers to reduce process and DDS load.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'isolate_localization',
+            default_value='true',
+            description=(
+                'Keep map_server and AMCL in separate processes so localization '
+                'remains available while navigation waits for map-to-odom.'
+            ),
         ),
         DeclareLaunchArgument(
             'nav_start_delay_s',
