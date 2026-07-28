@@ -3,7 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -11,6 +11,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_ros2_control = LaunchConfiguration('use_ros2_control')
     sim_mode = LaunchConfiguration('sim_mode')
+    motor_device = LaunchConfiguration('motor_device')
 
     pkg_path = get_package_share_directory('my_bot')
     xacro_file = os.path.join(pkg_path, 'description', 'robot.urdf.xacro')
@@ -21,6 +22,8 @@ def generate_launch_description():
         use_ros2_control,
         ' sim_mode:=',
         sim_mode,
+        ' motor_device:=',
+        motor_device,
     ])
 
     robot_state_publisher = Node(
@@ -48,6 +51,14 @@ def generate_launch_description():
             'sim_mode',
             default_value='false',
             description='Include Gazebo simulation plugins in the robot model.',
+        ),
+        DeclareLaunchArgument(
+            'motor_device',
+            default_value=EnvironmentVariable(
+                'ROBOT_MOTOR_DEVICE',
+                default_value='/dev/ttyACM0',
+            ),
+            description='Arduino serial device used by ros2_control.',
         ),
         robot_state_publisher,
     ])

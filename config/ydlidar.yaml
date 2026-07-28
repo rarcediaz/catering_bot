@@ -11,9 +11,8 @@ ydlidar:
     intensity: false
     sample_rate: 5
     abnormal_check_count: 4
-    # slam_toolbox registers one fixed laser geometry. Keep the ray count and
-    # angular increment stable across scans so Karto does not reject/misalign
-    # scans when the lidar motor speed varies.
+    # Keep ray count and angular increment stable for local filtering and
+    # central-computer SLAM/localization consumers.
     fixed_resolution: true
     reversion: true
     inverted: true

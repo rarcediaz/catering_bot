@@ -25,17 +25,22 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('front_stop_width_m', 0.8596)
         self.declare_parameter('side_stop_distance_m', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
-        self.declare_parameter('joystick_timeout_sec', 0.5)
+        self.declare_parameter('joystick_timeout_sec', 0.25)
         self.declare_parameter('nav_timeout_sec', 0.25)
         self.declare_parameter('nav_stop_hold_sec', 0.5)
+        self.declare_parameter('scan_timeout_sec', 0.5)
+        self.declare_parameter('startup_quiet_sec', 5.0)
         self.declare_parameter('command_epsilon', 0.005)
-        self.declare_parameter('power_command_topic', '/robot/power_command')
 
         self.obstacle_stop_enabled = self.get_bool_parameter('obstacle_stop_enabled')
         self.obstacle_stop_distance_m = float(self.get_parameter('obstacle_stop_distance_m').value)
-        self.obstacle_stop_distance_max_m = float(self.get_parameter('obstacle_stop_distance_max_m').value)
+        self.obstacle_stop_distance_max_m = float(
+            self.get_parameter('obstacle_stop_distance_max_m').value
+        )
         self.obstacle_stop_speed_mps = float(self.get_parameter('obstacle_stop_speed_mps').value)
-        self.obstacle_slowdown_margin_m = float(self.get_parameter('obstacle_slowdown_margin_m').value)
+        self.obstacle_slowdown_margin_m = float(
+            self.get_parameter('obstacle_slowdown_margin_m').value
+        )
         self.front_stop_start_x_m = float(self.get_parameter('front_stop_start_x_m').value)
         self.rear_stop_start_x_m = float(self.get_parameter('rear_stop_start_x_m').value)
         self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
@@ -45,8 +50,11 @@ class ObstacleSafetyNode(Node):
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
         self.nav_stop_hold_sec = float(self.get_parameter('nav_stop_hold_sec').value)
+        self.scan_timeout_sec = float(self.get_parameter('scan_timeout_sec').value)
+        self.startup_quiet_sec = float(
+            self.get_parameter('startup_quiet_sec').value
+        )
         self.command_epsilon = float(self.get_parameter('command_epsilon').value)
-        self.power_command_topic = str(self.get_parameter('power_command_topic').value)
 
         self.front_obstacle_active = False
         self.left_obstacle_active = False
@@ -63,9 +71,12 @@ class ObstacleSafetyNode(Node):
         self.latest_nav_cmd = Twist()
         self.latest_joy_time = None
         self.latest_nav_time = None
+        self.latest_scan_time = None
         self.nav_was_active = False
         self.nav_stop_hold_until = 0.0
-        self.operator_stop_latched = False
+        self.startup_gate_open = False
+        self.startup_quiet_until = time.monotonic() + self.startup_quiet_sec
+        self.scan_was_healthy = False
 
         self.front_range_pub = self.create_publisher(
             Float32,
@@ -92,23 +103,32 @@ class ObstacleSafetyNode(Node):
             '/robot_health/front_speed_limit_scale',
             10
         )
-        self.operator_stop_pub = self.create_publisher(
+        self.startup_gate_pub = self.create_publisher(
             Bool,
-            '/robot_health/operator_stop_active',
+            '/robot_health/startup_gate_open',
+            10
+        )
+        self.obstacle_health_pub = self.create_publisher(
+            Bool,
+            '/robot_health/obstacle_data_healthy',
             10
         )
         self.log_pub = self.create_publisher(String, '/robot_health/log', 10)
         self.nav_gate_pub = self.create_publisher(Twist, '/cmd_vel_nav_safe', 10)
+        self.joy_gate_pub = self.create_publisher(Twist, '/cmd_vel_joy_safe', 10)
         self.safety_cmd_pub = self.create_publisher(Twist, '/cmd_vel_safety', 10)
 
         self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/diff_cont/odom', self.odom_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_joy', self.joy_cmd_callback, 10)
         self.create_subscription(Twist, '/cmd_vel_nav_raw', self.nav_cmd_callback, 10)
-        self.create_subscription(String, self.power_command_topic, self.power_command_callback, 10)
 
         self.create_timer(0.05, self.publish_safety_hold)
-        self.send_log('Obstacle safety node active.')
+        self.send_log(
+            'Safety node started with motion inhibited until filtered lidar is '
+            f'fresh and the raw command stream is quiet for '
+            f'{self.startup_quiet_sec:.1f}s.'
+        )
 
     def get_bool_parameter(self, name):
         value = self.get_parameter(name).value
@@ -143,6 +163,14 @@ class ObstacleSafetyNode(Node):
             (time.monotonic() - self.latest_nav_time) <= self.nav_timeout_sec
         )
 
+    def is_scan_healthy(self):
+        if not self.obstacle_stop_enabled:
+            return True
+        return (
+            self.latest_scan_time is not None and
+            (time.monotonic() - self.latest_scan_time) <= self.scan_timeout_sec
+        )
+
     def is_twist_nonzero(self, cmd):
         return (
             abs(cmd.linear.x) > self.command_epsilon or
@@ -154,7 +182,7 @@ class ObstacleSafetyNode(Node):
         )
 
     def get_active_command(self):
-        if self.operator_stop_latched:
+        if not self.startup_gate_open or not self.is_scan_healthy():
             return None
         if self.is_joy_active():
             return self.latest_joy_cmd
@@ -165,34 +193,36 @@ class ObstacleSafetyNode(Node):
     def joy_cmd_callback(self, msg):
         self.latest_joy_cmd = msg
         self.latest_joy_time = time.monotonic()
+        if not self.startup_gate_open:
+            if self.is_twist_nonzero(msg):
+                self.startup_quiet_until = (
+                    time.monotonic() + self.startup_quiet_sec
+                )
+            self.joy_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+            return
+        if not self.is_scan_healthy():
+            self.joy_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+            return
+        self.joy_gate_pub.publish(self.apply_motion_constraints(msg))
 
     def nav_cmd_callback(self, msg):
         self.latest_nav_cmd = msg
         self.latest_nav_time = time.monotonic()
-        if self.operator_stop_latched:
+        if not self.startup_gate_open:
+            if self.is_twist_nonzero(msg):
+                self.startup_quiet_until = (
+                    time.monotonic() + self.startup_quiet_sec
+                )
+            self.nav_gate_pub.publish(Twist())
+            self.safety_cmd_pub.publish(Twist())
+            return
+        if not self.is_scan_healthy():
             self.nav_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
             return
         self.nav_gate_pub.publish(self.apply_motion_constraints(msg))
-
-    def power_command_callback(self, msg):
-        command = str(msg.data).strip().upper()
-        if command in ('STOP', 'OFF'):
-            if not self.operator_stop_latched:
-                self.send_log(
-                    'Operator safety stop latched. Motion is blocked until Robot On / Reset.',
-                    is_crit=True,
-                )
-            self.operator_stop_latched = True
-            self.latest_joy_time = None
-            self.latest_nav_time = None
-            self.nav_gate_pub.publish(Twist())
-            self.safety_cmd_pub.publish(Twist())
-        elif command in ('RESET', 'ON', 'AUTO', 'MANUAL'):
-            if self.operator_stop_latched:
-                self.send_log('Operator safety stop cleared.')
-            self.operator_stop_latched = False
-        self.operator_stop_pub.publish(Bool(data=self.operator_stop_latched))
 
     def odom_callback(self, msg):
         self.forward_speed_mps = msg.twist.twist.linear.x
@@ -225,7 +255,7 @@ class ObstacleSafetyNode(Node):
         )
 
     def apply_motion_constraints(self, cmd):
-        if self.operator_stop_latched:
+        if not self.startup_gate_open or not self.is_scan_healthy():
             return Twist()
         limited = self.copy_twist(cmd)
 
@@ -247,9 +277,48 @@ class ObstacleSafetyNode(Node):
 
     def publish_safety_hold(self):
         now = time.monotonic()
-        self.operator_stop_pub.publish(Bool(data=self.operator_stop_latched))
-        if self.operator_stop_latched:
+        scan_healthy = self.is_scan_healthy()
+        self.obstacle_health_pub.publish(Bool(data=scan_healthy))
+
+        if scan_healthy != self.scan_was_healthy:
+            if scan_healthy:
+                self.send_log('Fresh filtered lidar data available to obstacle safety.')
+            elif self.latest_scan_time is not None:
+                self.send_log(
+                    'Filtered lidar data is stale; all motion is blocked.',
+                    is_crit=True,
+                )
+            self.scan_was_healthy = scan_healthy
+
+        active_nonzero_command = (
+            (
+                self.is_nav_active()
+                and self.is_twist_nonzero(self.latest_nav_cmd)
+            )
+            or (
+                self.is_joy_active()
+                and self.is_twist_nonzero(self.latest_joy_cmd)
+            )
+        )
+        if (
+            not self.startup_gate_open
+            and scan_healthy
+            and not active_nonzero_command
+            and now >= self.startup_quiet_until
+        ):
+            self.startup_gate_open = True
+            self.latest_joy_time = None
+            self.latest_nav_time = None
+            self.nav_was_active = False
+            self.send_log(
+                'Startup safety gate opened automatically; fresh commands may '
+                'now pass.'
+            )
+
+        self.startup_gate_pub.publish(Bool(data=self.startup_gate_open))
+        if not self.startup_gate_open or not scan_healthy:
             self.nav_gate_pub.publish(Twist())
+            self.joy_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
             self.speed_limit_scale_pub.publish(Float32(data=0.0))
             return
@@ -283,6 +352,7 @@ class ObstacleSafetyNode(Node):
     def scan_callback(self, msg):
         if not self.obstacle_stop_enabled:
             return
+        self.latest_scan_time = time.monotonic()
 
         closest_forward_clearance = math.inf
         closest_left_clearance = math.inf
@@ -300,11 +370,17 @@ class ObstacleSafetyNode(Node):
             point_x = distance * math.cos(angle)
             point_y = distance * math.sin(angle)
 
-            if point_x >= self.front_stop_start_x_m and abs(point_y) <= self.front_stop_half_width_m:
+            if (
+                point_x >= self.front_stop_start_x_m
+                and abs(point_y) <= self.front_stop_half_width_m
+            ):
                 forward_clearance = point_x - self.front_stop_start_x_m
                 closest_forward_clearance = min(closest_forward_clearance, forward_clearance)
 
-            if point_x <= -self.rear_stop_start_x_m and abs(point_y) <= self.front_stop_half_width_m:
+            if (
+                point_x <= -self.rear_stop_start_x_m
+                and abs(point_y) <= self.front_stop_half_width_m
+            ):
                 rear_clearance = (-point_x) - self.rear_stop_start_x_m
                 closest_rear_clearance = min(closest_rear_clearance, rear_clearance)
 
@@ -323,7 +399,10 @@ class ObstacleSafetyNode(Node):
         right_obstacle_detected = closest_right_clearance <= self.side_stop_distance_m
         rear_obstacle_detected = closest_rear_clearance <= dynamic_stop_distance
 
-        if math.isfinite(closest_forward_clearance) and closest_forward_clearance < slowdown_distance:
+        if (
+            math.isfinite(closest_forward_clearance)
+            and closest_forward_clearance < slowdown_distance
+        ):
             margin = max(self.obstacle_slowdown_margin_m, 1e-3)
             speed_limit_scale = max(
                 0.0,
@@ -348,7 +427,11 @@ class ObstacleSafetyNode(Node):
         self.right_obstacle_active = right_obstacle_detected
         self.rear_obstacle_active = rear_obstacle_detected
 
-        reported_range = closest_forward_clearance if math.isfinite(closest_forward_clearance) else -1.0
+        reported_range = (
+            closest_forward_clearance
+            if math.isfinite(closest_forward_clearance)
+            else -1.0
+        )
         self.front_range_pub.publish(Float32(data=float(reported_range)))
         self.front_stop_distance_pub.publish(Float32(data=float(dynamic_stop_distance)))
         self.forward_speed_pub.publish(Float32(data=float(forward_speed)))
@@ -356,6 +439,8 @@ class ObstacleSafetyNode(Node):
 
         if self.is_nav_active():
             self.nav_gate_pub.publish(self.apply_motion_constraints(self.latest_nav_cmd))
+        if self.is_joy_active():
+            self.joy_gate_pub.publish(self.apply_motion_constraints(self.latest_joy_cmd))
 
         self.log_obstacle_transition(
             front_obstacle_detected,
@@ -367,19 +452,22 @@ class ObstacleSafetyNode(Node):
         self.log_obstacle_transition(
             left_obstacle_detected,
             previous_left,
-            f'Left turn blocked ({closest_left_clearance:.2f}m <= {self.side_stop_distance_m:.2f}m).',
+            f'Left turn blocked ({closest_left_clearance:.2f}m <= '
+            f'{self.side_stop_distance_m:.2f}m).',
             'Left side clear.'
         )
         self.log_obstacle_transition(
             right_obstacle_detected,
             previous_right,
-            f'Right turn blocked ({closest_right_clearance:.2f}m <= {self.side_stop_distance_m:.2f}m).',
+            f'Right turn blocked ({closest_right_clearance:.2f}m <= '
+            f'{self.side_stop_distance_m:.2f}m).',
             'Right side clear.'
         )
         self.log_obstacle_transition(
             rear_obstacle_detected,
             previous_rear,
-            f'Rear motion blocked ({closest_rear_clearance:.2f}m <= {dynamic_stop_distance:.2f}m).',
+            f'Rear motion blocked ({closest_rear_clearance:.2f}m <= '
+            f'{dynamic_stop_distance:.2f}m).',
             'Rear area clear.'
         )
 

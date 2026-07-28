@@ -15,8 +15,9 @@ def generate_launch_description():
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
+    scan_timeout_sec = LaunchConfiguration('scan_timeout_sec')
+    startup_quiet_sec = LaunchConfiguration('startup_quiet_sec')
     scan_topic = LaunchConfiguration('scan_topic')
-    power_command_topic = LaunchConfiguration('power_command_topic')
 
     safety_node = Node(
         package='my_bot',
@@ -34,11 +35,14 @@ def generate_launch_description():
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
             'nav_stop_hold_sec': nav_stop_hold_sec,
-            'power_command_topic': power_command_topic,
+            'scan_timeout_sec': scan_timeout_sec,
+            'startup_quiet_sec': startup_quiet_sec,
         }],
         remappings=[
             ('/scan', scan_topic),
         ],
+        respawn=True,
+        respawn_delay=1.0,
     )
 
     return LaunchDescription([
@@ -60,7 +64,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'obstacle_slowdown_margin_m',
             default_value='0.15',
-            description='Additional distance ahead of the stop threshold where forward speed is scaled down.'
+            description=(
+                'Additional distance ahead of the stop threshold where forward '
+                'speed is scaled down.'
+            )
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
@@ -80,7 +87,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'side_stop_distance_m',
             default_value='0.25',
-            description='Block left/right turns when an obstacle is within this side distance in meters.'
+            description=(
+                'Block left/right turns when an obstacle is within this side '
+                'distance in meters.'
+            )
         ),
         DeclareLaunchArgument(
             'side_stop_start_y_m',
@@ -95,12 +105,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'nav_stop_hold_sec',
             default_value='0.50',
-            description='High-priority zero-command hold time after Nav2 commands stop.'
+            description='High-priority zero-command hold time after navigation commands stop.'
         ),
         DeclareLaunchArgument(
-            'power_command_topic',
-            default_value='/robot/power_command',
-            description='STOP/OFF latch motion; RESET/ON clears the operator safety stop.'
+            'scan_timeout_sec',
+            default_value='0.50',
+            description='Block all motion when filtered scans are older than this.'
+        ),
+        DeclareLaunchArgument(
+            'startup_quiet_sec',
+            default_value='5.0',
+            description=(
+                'Require this many seconds without an active raw motion command '
+                'before the startup safety gate opens automatically.'
+            )
         ),
         safety_node,
     ])

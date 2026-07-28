@@ -23,6 +23,7 @@ find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files
   #set(ament_cmake_copyright_FOUND TRUE)
@@ -30,20 +31,32 @@ if(BUILD_TESTING)
   # uncomment the line when this package is not in a git repo
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+  ament_add_pytest_test(
+    runtime_contract_test
+    test/test_runtime_contract.py
+  )
+  ament_add_pytest_test(
+    safety_logic_test
+    test/test_safety_logic.py
+  )
 endif()
 
 install(
-  DIRECTORY config description launch maps systemd worlds
+  DIRECTORY config description docs launch maps systemd worlds
   DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
 )
 
 install(
   PROGRAMS
     scripts/xbox_controller.py
     scripts/safety_node.py
+    scripts/robot_health_node.py
     scripts/scan_canonicalizer.py
     scripts/heartbeat_node.py
     scripts/nav2_startup_gate.py
+    scripts/generate_cyclonedds_config.py
+    scripts/generate_wifi_ap_config.sh
     scripts/start_robot_stack.sh
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    LogInfo,
     SetEnvironmentVariable,
     TimerAction,
 )
@@ -17,9 +18,6 @@ def generate_launch_description():
     package_share = get_package_share_directory(package_name)
     cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
 
-    robot_id = LaunchConfiguration('robot_id')
-    mission_control_url = LaunchConfiguration('mission_control_url')
-    use_heartbeat = LaunchConfiguration('use_heartbeat')
     map_file = LaunchConfiguration('map')
     keepout_mask_file = LaunchConfiguration('keepout_mask')
     display_map_file = LaunchConfiguration('display_map')
@@ -35,11 +33,7 @@ def generate_launch_description():
             os.path.join(package_share, 'launch', 'rpi_robot.launch.py')
         ),
         launch_arguments={
-            'robot_id': robot_id,
-            'mission_control_url': mission_control_url,
-            'use_heartbeat': use_heartbeat,
             'use_joystick': 'false',
-            'use_safety_node': 'true',
         }.items(),
     )
 
@@ -63,23 +57,13 @@ def generate_launch_description():
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
         SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
-        DeclareLaunchArgument(
-            'robot_id',
-            default_value='IntelliTrolley-01',
-            description='Stable robot identity shown in Mission Control.',
-        ),
-        DeclareLaunchArgument(
-            'mission_control_url',
-            default_value='http://127.0.0.1:8000',
-            description='Mission Control server URL for optional heartbeat telemetry.',
-        ),
-        DeclareLaunchArgument(
-            'use_heartbeat',
-            default_value='false',
-            description=(
-                'The local ROS adapter supplies telemetry; '
-                'HTTP heartbeat is normally disabled.'
-            ),
+        LogInfo(
+            msg=(
+                'WARNING: rpi_autonomy.launch.py is a legacy all-in-one diagnostic '
+                'launch. It is not supported as the Pi production service entrypoint. '
+                'Use rpi_robot.launch.py on the Pi and central_compute.launch.py on '
+                'the central computer.'
+            )
         ),
         DeclareLaunchArgument(
             'map',

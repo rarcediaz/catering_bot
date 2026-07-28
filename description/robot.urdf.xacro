@@ -3,6 +3,7 @@
 
   <xacro:arg name="use_ros2_control" default="false"/>
   <xacro:arg name="sim_mode" default="false"/>
+  <xacro:arg name="motor_device" default="/dev/ttyACM0"/>
 
   <xacro:include filename="robot_core.xacro"/>
   <xacro:include filename="lidar.xacro"/>

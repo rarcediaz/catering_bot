@@ -1,109 +1,106 @@
-# My Bot
+# IntelliTrolley ROS 2
 
-## Run the autonomous robot on the Raspberry Pi
-
-The Raspberry Pi service owns the robot-critical stack: hardware, lidar,
-odometry, robot TF, obstacle safety, Nav2, AMCL, and the map layers. Mission
-Control runs as a second Pi service, while the laptop only needs a browser.
-
-On the Raspberry Pi, build the workspace and install the service once:
+The Raspberry Pi is the robot's hardware-and-safety computer. Its only
+supported production entrypoint is:
 
 ```bash
-cd /home/zrpi/robot_ws
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
-./src/catering_bot/scripts/install_robot_service.sh
+ros2 launch my_bot rpi_robot.launch.py
 ```
 
-The installer discovers its actual checkout directory, so it also works when
-the repository folder is named `my_bot` instead of `catering_bot`. The ROS
-package and launch command remain named `my_bot` in either case.
+That launch owns the Arduino/`ros2_control` stack, lidar and local scan
+processing, wheel odometry, robot TF, local command selection, obstacle safety,
+automatic startup motion gating, and robot-health reporting. It does **not** start
+SLAM, AMCL, Nav2, maps, RViz, Mission Control, or a phone backend.
 
-The installer is safe to rerun after an update; it replaces the unit and
-restarts the managed service. Every service start performs a clean-start sweep:
-it stops stale robot/Nav2 processes, releases the lidar and motor serial
-devices, and only then launches one new stack in its own process group.
+The central computer owns `map -> odom`, SLAM/localization, maps, Nav2, Mission
+Control, and the phone-facing API. `rpi_autonomy.launch.py` is retained only as
+a legacy all-in-one diagnostic during migration and is rejected by the
+production service wrapper.
 
-The installer enables and immediately starts `my-bot-robot.service`. On each
-boot, the service first clears stale owners, waits for `/dev/ttyUSB0` (lidar)
-and `/dev/ttyACM0` (motor controller), then runs:
+## Safety command path
+
+```text
+central Nav2  /cmd_vel_nav_raw ─┐
+                                ├─> obstacle_safety_node
+manual input  /cmd_vel_joy ─────┘        ├─> /cmd_vel_nav_safe
+                                         ├─> /cmd_vel_joy_safe
+scan/startup safety ────────────────────> /cmd_vel_safety
+                                                   │
+                                                   v
+                                              twist_mux
+                                                   │
+                                                   v
+                                  /diff_cont/cmd_vel_unstamped
+                                                   │
+                                                   v
+                                  diff_drive_controller -> Arduino
+```
+
+Only `twist_mux` publishes the diff-drive command topic. Safety override has
+the highest mux priority, safe manual control is next, and safe navigation is
+last. Missing raw commands, a failed safety node, stale filtered scans, the
+controller command timeout, and the Arduino firmware watchdog all fail toward
+zero velocity.
+
+There is no Reset/On command or Pi-side operator latch. On every safety-node
+start, motion is inhibited automatically until filtered lidar is fresh and no
+active raw motion command has been observed for five seconds. This prevents an
+already-streaming command from passing straight through a restart.
+
+The operator Stop button is a central-computer operation: it cancels the
+current Nav2 goal. Nav2 then stops or zeros `/cmd_vel_nav_raw`, and the Pi
+command/controller timeouts stop the motors. This is a navigation stop, not an
+emergency stop; a physical emergency-stop circuit is still required.
+
+## Documents
+
+- [Pi-to-central topic and TF contract](docs/PI_CENTRAL_CONTRACT.md)
+- [Pi deployment and hardware acceptance](docs/PI_DEPLOYMENT.md)
+- [Disabled Phase 2 Wi-Fi access-point design](docs/WIFI_AP_PHASE2.md)
+
+## Service summary
+
+Build first, then run the installer as the normal Pi user:
 
 ```bash
-ros2 launch my_bot rpi_autonomy.launch.py use_heartbeat:=false
+cd /path/to/robot_ws
+colcon build --symlink-install --packages-up-to my_bot
+./src/my_bot/scripts/install_robot_service.sh --dry-run
+./src/my_bot/scripts/install_robot_service.sh --no-start
 ```
 
-After a startup grace period, the wrapper checks that the lidar and motor
-devices remain present. Three consecutive device failures cause the complete
-launch to restart through systemd. The lidar launch also respawns its driver
-after an isolated driver exit. ROS topic probes are disabled by default because
-short ROS graph discovery delays can otherwise cause false restarts; they can
-be enabled with `ROBOT_WATCHDOG_TOPIC_CHECKS=true` for diagnostics.
-
-Useful commands on the Raspberry Pi:
-
-```bash
-sudo systemctl status my-bot-robot.service --no-pager
-sudo journalctl -u my-bot-robot.service -f -o cat
-sudo systemctl restart my-bot-robot.service
-sudo systemctl stop my-bot-robot.service
-```
-
-Do not run another robot launch manually while the service is active. The
-hardware launch uses a process lock to reject a second stack before it can
-compete for the Arduino and lidar serial streams. For a manual full-stack
-debug launch:
-
-```bash
-sudo systemctl stop my-bot-robot.service
-source /home/zrpi/robot_ws/install/setup.bash
-ros2 launch my_bot rpi_autonomy.launch.py
-```
-
-For hardware-only diagnostics, use `rpi_robot.launch.py`. The original
-central-compute mode remains available as a fallback during migration.
-
-Restore automatic operation afterward with:
+Edit `/etc/default/my-bot-robot` to select stable
+`/dev/serial/by-id/...` motor and lidar paths, a common `ROS_DOMAIN_ID`, and
+optional Cyclone DDS peers. Then:
 
 ```bash
 sudo systemctl start my-bot-robot.service
+sudo systemctl status my-bot-robot.service --no-pager
+sudo journalctl -u my-bot-robot.service -f -o cat
 ```
 
-For developer access from the central computer, use SSH rather than exposing a
-second debug service:
+On its first managed start, the wrapper stops old robot/autonomy processes and
+serial-device owners, then records a marker under
+`~/.local/state/my-bot/`. Later starts rely on the wrapper lock, launch lock,
+and explicit device-owner checks instead of repeatedly killing processes.
 
-```bash
-ssh zrpi@zrpi-desktop.local 'sudo systemctl status my-bot-robot.service --no-pager'
-ssh -t zrpi@zrpi-desktop.local 'sudo journalctl -u my-bot-robot.service -f -o cat'
-```
+The wrapper waits for both devices without treating Wi-Fi or DDS discovery as
+a startup dependency. Shutdown publishes a best-effort zero safety command
+before terminating the launch process group; controller and firmware timeouts
+remain the independent backstops.
 
-Use SSH keys and keep the private key only on the developer's central computer.
-The robot does not expose its logs through the Mission Control API.
+## How Wi-Fi relates to the robot stack
 
-The wrapper automatically detects ROS 2 Humble or Jazzy. Deployment settings
-can be overridden with `sudo systemctl edit my-bot-robot.service`; supported
-variables include `ROS_DOMAIN_ID`, `ROS_SETUP_FILE`, `ROBOT_WORKSPACE`,
-`ROBOT_LAUNCH_FILE`, `ROBOT_LIDAR_DEVICE`, `ROBOT_MOTOR_DEVICE`, and the
-`ROBOT_WATCHDOG_*` settings. Clean startup is enabled by default with
-`ROBOT_CLEAN_START=true`. Set
-`ROBOT_LAUNCH_FILE=rpi_robot.launch.py` to temporarily restore the old
-hardware-only profile. After an override, restart the service:
+Wi-Fi is not a ROS node and is not started by `rpi_robot.launch.py`. The Phase
+2 access point is currently disabled. Once its reviewed NetworkManager profile
+is explicitly installed, NetworkManager starts the AP automatically during Pi
+boot because the profile has `autoconnect=true`. The ROS hardware service
+starts independently and may be running before Wi-Fi is ready.
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart my-bot-robot.service
-```
+The central computer and phone then join the Pi-hosted network. DDS discovers
+the central computer when the network appears; a Wi-Fi failure removes remote
+commands but does not stop the local lidar, safety, controller, or firmware
+watchdogs. See [the Phase 2 boot flow](docs/WIFI_AP_PHASE2.md#boot-order-and-stack-relationship).
 
-For more reliable hardware naming, replace `/dev/ttyUSB0` and `/dev/ttyACM0`
-with stable `/dev/serial/by-id/...` paths in both the service overrides and the
-matching ROS configuration.
-
-## Stop behavior
-
-**Stop Navigation** cancels only the current Nav2 goal. **Safety Stop**
-publishes `STOP` on `/robot/power_command`; the Pi safety node then holds zero
-velocity continuously at the highest twist-mux priority. This latch survives a
-browser disconnect or Mission Control restart and clears only after **Robot
-On** or another reset command.
-
-Software stops supplement, but do not replace, a physical emergency-stop
-circuit.
+Never run `launch_robot.launch.py` directly in production. It is an internal
+include without the top-level hardware lock.

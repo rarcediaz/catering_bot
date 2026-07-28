@@ -3,11 +3,20 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, RegisterEventHandler, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    LogInfo,
+    RegisterEventHandler,
+    SetEnvironmentVariable,
+    TimerAction,
+)
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
+from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 
 from launch_ros.actions import Node
 
@@ -18,10 +27,6 @@ def generate_launch_description():
     package_share = get_package_share_directory(package_name)
     cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
     use_joystick = LaunchConfiguration('use_joystick')
-    use_heartbeat = LaunchConfiguration('use_heartbeat')
-    robot_id = LaunchConfiguration('robot_id')
-    mission_control_url = LaunchConfiguration('mission_control_url')
-    use_safety_node = LaunchConfiguration('use_safety_node')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_stop_distance_max_m = LaunchConfiguration('obstacle_stop_distance_max_m')
     obstacle_stop_speed_mps = LaunchConfiguration('obstacle_stop_speed_mps')
@@ -32,6 +37,10 @@ def generate_launch_description():
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
+    scan_timeout_sec = LaunchConfiguration('scan_timeout_sec')
+    startup_quiet_sec = LaunchConfiguration('startup_quiet_sec')
+    motor_device = LaunchConfiguration('motor_device')
+    lidar_device = LaunchConfiguration('lidar_device')
 
     # Robot State Publisher
     rsp = IncludeLaunchDescription(
@@ -44,18 +53,16 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': 'false',
-            'use_ros2_control': 'true'
+            'use_ros2_control': 'true',
+            'motor_device': motor_device,
         }.items()
     )
 
-    # JoyStick
-
-
     joystick = IncludeLaunchDescription(
-                PythonLaunchDescriptionSource([os.path.join(
-                    get_package_share_directory(package_name),'launch','joystick.launch.py'
-                )]),
-                condition=IfCondition(use_joystick)
+        PythonLaunchDescriptionSource(
+            os.path.join(package_share, 'launch', 'joystick.launch.py')
+        ),
+        condition=IfCondition(use_joystick)
     )
 
     safety_node = IncludeLaunchDescription(
@@ -77,11 +84,10 @@ def generate_launch_description():
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
             'nav_stop_hold_sec': nav_stop_hold_sec,
+            'scan_timeout_sec': scan_timeout_sec,
+            'startup_quiet_sec': startup_quiet_sec,
         }.items(),
-        condition=IfCondition(use_safety_node)
     )
-
-
     # YDLidar Launch
     ydlidar = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -90,7 +96,10 @@ def generate_launch_description():
                 'launch',
                 'ydlidar.launch.py'
             )
-        )
+        ),
+        launch_arguments={
+            'port': lidar_device,
+        }.items(),
     )
 
     # Controllers
@@ -105,7 +114,7 @@ def generate_launch_description():
         executable='ros2_control_node',
         parameters=[controller_params_file],
         remappings=[('~/robot_description', '/robot_description')],
-        output='screen'
+        output='screen',
     )
 
     delayed_controller_manager = TimerAction(
@@ -116,7 +125,11 @@ def generate_launch_description():
     diff_drive_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["diff_cont"],
+        arguments=[
+            "diff_cont",
+            "--controller-manager", "/controller_manager",
+            "--controller-manager-timeout", "30",
+        ],
     )
 
     delayed_diff_drive_spawner = RegisterEventHandler(
@@ -129,13 +142,34 @@ def generate_launch_description():
     joint_broad_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_broad"],
+        arguments=[
+            "joint_broad",
+            "--controller-manager", "/controller_manager",
+            "--controller-manager-timeout", "30",
+        ],
     )
 
     delayed_joint_broad_spawner = RegisterEventHandler(
         event_handler=OnProcessStart(
             target_action=controller_manager,
             on_start=[joint_broad_spawner],
+        )
+    )
+
+    controller_manager_exit = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=controller_manager,
+            on_exit=[
+                LogInfo(
+                    msg=(
+                        'controller_manager exited; shutting down the hardware '
+                        'launch for a clean systemd retry.'
+                    )
+                ),
+                EmitEvent(
+                    event=Shutdown(reason='controller_manager exited')
+                ),
+            ],
         )
     )
 
@@ -162,7 +196,9 @@ def generate_launch_description():
         remappings=[
             ('scan', '/scan'),
             ('scan_canonical', '/scan_canonical'),
-        ]
+        ],
+        respawn=True,
+        respawn_delay=2.0,
     )
 
     scan_filter = Node(
@@ -174,7 +210,9 @@ def generate_launch_description():
         remappings=[
             ('scan', '/scan_canonical'),
             ('scan_filtered', '/scan_filtered'),
-        ]
+        ],
+        respawn=True,
+        respawn_delay=2.0,
     )
 
     twist_mux = Node(
@@ -185,49 +223,30 @@ def generate_launch_description():
         parameters=[
             {'use_sim_time': False},
             twist_mux_config
-        ]
+        ],
+        respawn=True,
+        respawn_delay=1.0,
     )
 
-    heartbeat = Node(
+    robot_health = Node(
         package=package_name,
-        executable='heartbeat_node.py',
+        executable='robot_health_node.py',
+        name='robot_health_node',
         output='screen',
-        parameters=[
-            {
-                'robot_id': robot_id,
-                'server_url': mission_control_url,
-            }
-        ],
-        condition=IfCondition(use_heartbeat)
+        respawn=True,
+        respawn_delay=2.0,
     )
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
-        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
+        SetEnvironmentVariable(
+            'CYCLONEDDS_URI',
+            EnvironmentVariable('CYCLONEDDS_URI', default_value=cyclonedds_uri),
+        ),
         DeclareLaunchArgument(
             'use_joystick',
             default_value='false',
             description='Launch local joystick teleop on this machine if true.'
-        ),
-        DeclareLaunchArgument(
-            'use_heartbeat',
-            default_value='true',
-            description='Send periodic robot telemetry to the mission control server.'
-        ),
-        DeclareLaunchArgument(
-            'robot_id',
-            default_value='IntelliTrolley-01',
-            description='Stable robot identity shown in Mission Control.'
-        ),
-        DeclareLaunchArgument(
-            'mission_control_url',
-            default_value='http://127.0.0.1:8000',
-            description='Mission Control server base URL used by the heartbeat node.'
-        ),
-        DeclareLaunchArgument(
-            'use_safety_node',
-            default_value='true',
-            description='Launch the obstacle safety node if true.'
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
@@ -247,7 +266,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'obstacle_slowdown_margin_m',
             default_value='0.15',
-            description='Additional distance ahead of the stop threshold where forward speed is scaled down.'
+            description=(
+                'Additional distance ahead of the stop threshold where forward '
+                'speed is scaled down.'
+            )
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
@@ -267,7 +289,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'side_stop_distance_m',
             default_value='0.25',
-            description='Block left/right turns when an obstacle is within this side distance in meters.'
+            description=(
+                'Block left/right turns when an obstacle is within this side '
+                'distance in meters.'
+            )
         ),
         DeclareLaunchArgument(
             'side_stop_start_y_m',
@@ -277,7 +302,36 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'nav_stop_hold_sec',
             default_value='0.50',
-            description='High-priority zero-command hold time after Nav2 commands stop.'
+            description='High-priority zero-command hold time after navigation commands stop.'
+        ),
+        DeclareLaunchArgument(
+            'scan_timeout_sec',
+            default_value='0.50',
+            description='Block all motion when filtered scans are older than this.'
+        ),
+        DeclareLaunchArgument(
+            'startup_quiet_sec',
+            default_value='5.0',
+            description=(
+                'Seconds of quiet raw motion commands required before the '
+                'startup gate opens automatically.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'motor_device',
+            default_value=EnvironmentVariable(
+                'ROBOT_MOTOR_DEVICE',
+                default_value='/dev/ttyACM0',
+            ),
+            description='Arduino serial device; prefer /dev/serial/by-id/... on the Pi.'
+        ),
+        DeclareLaunchArgument(
+            'lidar_device',
+            default_value=EnvironmentVariable(
+                'ROBOT_LIDAR_DEVICE',
+                default_value='/dev/ttyUSB0',
+            ),
+            description='YDLidar serial device; prefer /dev/serial/by-id/... on the Pi.'
         ),
         rsp,
         joystick,
@@ -288,6 +342,7 @@ def generate_launch_description():
         delayed_controller_manager,
         delayed_diff_drive_spawner,
         delayed_joint_broad_spawner,
+        controller_manager_exit,
         twist_mux,
-        heartbeat,
+        robot_health,
     ])

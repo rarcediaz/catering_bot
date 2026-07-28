@@ -12,7 +12,7 @@ from launch.actions import (
 )
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 
 
 _hardware_lock_handle = None
@@ -60,10 +60,7 @@ def generate_launch_description():
     package_name = 'my_bot'
     package_share = get_package_share_directory(package_name)
     cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
-    robot_id = LaunchConfiguration('robot_id')
-    mission_control_url = LaunchConfiguration('mission_control_url')
-    use_heartbeat = LaunchConfiguration('use_heartbeat')
-    use_safety_node = LaunchConfiguration('use_safety_node')
+    use_joystick = LaunchConfiguration('use_joystick')
     obstacle_stop_distance_m = LaunchConfiguration('obstacle_stop_distance_m')
     obstacle_stop_distance_max_m = LaunchConfiguration('obstacle_stop_distance_max_m')
     obstacle_stop_speed_mps = LaunchConfiguration('obstacle_stop_speed_mps')
@@ -74,6 +71,10 @@ def generate_launch_description():
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
+    scan_timeout_sec = LaunchConfiguration('scan_timeout_sec')
+    startup_quiet_sec = LaunchConfiguration('startup_quiet_sec')
+    motor_device = LaunchConfiguration('motor_device')
+    lidar_device = LaunchConfiguration('lidar_device')
 
     robot_base = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -84,11 +85,7 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'use_joystick': 'false',
-            'robot_id': robot_id,
-            'mission_control_url': mission_control_url,
-            'use_heartbeat': use_heartbeat,
-            'use_safety_node': use_safety_node,
+            'use_joystick': use_joystick,
             'obstacle_stop_distance_m': obstacle_stop_distance_m,
             'obstacle_stop_distance_max_m': obstacle_stop_distance_max_m,
             'obstacle_stop_speed_mps': obstacle_stop_speed_mps,
@@ -99,31 +96,23 @@ def generate_launch_description():
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
             'nav_stop_hold_sec': nav_stop_hold_sec,
+            'scan_timeout_sec': scan_timeout_sec,
+            'startup_quiet_sec': startup_quiet_sec,
+            'motor_device': motor_device,
+            'lidar_device': lidar_device,
         }.items(),
     )
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
-        SetEnvironmentVariable('CYCLONEDDS_URI', cyclonedds_uri),
-        DeclareLaunchArgument(
-            'robot_id',
-            default_value='IntelliTrolley-01',
-            description='Stable robot identity shown in Mission Control.'
+        SetEnvironmentVariable(
+            'CYCLONEDDS_URI',
+            EnvironmentVariable('CYCLONEDDS_URI', default_value=cyclonedds_uri),
         ),
         DeclareLaunchArgument(
-            'mission_control_url',
-            default_value='http://127.0.0.1:8000',
-            description='Mission Control server base URL used by the heartbeat node.'
-        ),
-        DeclareLaunchArgument(
-            'use_heartbeat',
+            'use_joystick',
             default_value='false',
-            description='Send periodic robot telemetry to the mission control server.'
-        ),
-        DeclareLaunchArgument(
-            'use_safety_node',
-            default_value='true',
-            description='Launch the obstacle safety node on the robot computer.'
+            description='Launch the Pi-connected joystick and route it through safety.'
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
@@ -143,7 +132,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'obstacle_slowdown_margin_m',
             default_value='0.15',
-            description='Additional distance ahead of the stop threshold where forward speed is scaled down.'
+            description=(
+                'Additional distance ahead of the stop threshold where forward '
+                'speed is scaled down.'
+            )
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
@@ -163,7 +155,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'side_stop_distance_m',
             default_value='0.25',
-            description='Block left/right turns when an obstacle is within this side distance in meters.'
+            description=(
+                'Block left/right turns when an obstacle is within this side '
+                'distance in meters.'
+            )
         ),
         DeclareLaunchArgument(
             'side_stop_start_y_m',
@@ -173,7 +168,36 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'nav_stop_hold_sec',
             default_value='0.50',
-            description='High-priority zero-command hold time after Nav2 commands stop.'
+            description='High-priority zero-command hold time after navigation commands stop.'
+        ),
+        DeclareLaunchArgument(
+            'scan_timeout_sec',
+            default_value='0.50',
+            description='Block motion when filtered lidar scans become stale.'
+        ),
+        DeclareLaunchArgument(
+            'startup_quiet_sec',
+            default_value='5.0',
+            description=(
+                'Seconds of quiet raw motion commands required before the '
+                'startup gate opens automatically.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'motor_device',
+            default_value=EnvironmentVariable(
+                'ROBOT_MOTOR_DEVICE',
+                default_value='/dev/ttyACM0',
+            ),
+            description='Arduino serial device; use /dev/serial/by-id/... in production.'
+        ),
+        DeclareLaunchArgument(
+            'lidar_device',
+            default_value=EnvironmentVariable(
+                'ROBOT_LIDAR_DEVICE',
+                default_value='/dev/ttyUSB0',
+            ),
+            description='YDLidar serial device; use /dev/serial/by-id/... in production.'
         ),
         robot_base,
     ])

@@ -9,16 +9,12 @@
         <NetworkInterface
           autodetermine="true"
           priority="default"
-          multicast="false"/>
+          multicast="default"/>
       </Interfaces>
-      <AllowMulticast>false</AllowMulticast>
+      <AllowMulticast>spdp</AllowMulticast>
       <Transport>udp</Transport>
     </General>
     <Discovery>
-      <Peers>
-        <Peer Address="rodrigo-linux-laptop.local"/>
-        <Peer Address="zrpi-desktop.local"/>
-      </Peers>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>50</MaxAutoParticipantIndex>
     </Discovery>

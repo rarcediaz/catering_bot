@@ -1,0 +1,28 @@
+# Runtime settings for my-bot-robot.service.
+# Copy to /etc/default/my-bot-robot and edit only on the Raspberry Pi.
+
+# Prefer the stable paths reported by:
+#   ls -l /dev/serial/by-id/
+ROBOT_LIDAR_DEVICE=/dev/ttyUSB0
+ROBOT_MOTOR_DEVICE=/dev/ttyACM0
+
+# Zero waits indefinitely for devices at boot.
+ROBOT_DEVICE_WAIT_TIMEOUT_S=0
+ROBOT_WATCHDOG_ENABLED=true
+ROBOT_WATCHDOG_STARTUP_GRACE_S=20
+ROBOT_WATCHDOG_INTERVAL_S=2
+ROBOT_WATCHDOG_FAILURE_LIMIT=3
+
+# On the first managed start, stop old robot/autonomy processes and serial
+# owners, then record completion under ~/.local/state/my-bot/. Use "always"
+# only for deliberate recovery; use "off" to disable the sweep.
+ROBOT_INITIAL_CLEAN_START=once
+
+# Keep these identical on the Pi and central computer.
+ROS_DOMAIN_ID=0
+
+# Optional comma-separated central-computer IPs or DNS/mDNS names.
+# Leave blank to use SPDP multicast discovery on the selected interface.
+ROBOT_CYCLONEDDS_PEERS=
+ROBOT_CYCLONEDDS_INTERFACE=
+ROBOT_CYCLONEDDS_ALLOW_MULTICAST=spdp
