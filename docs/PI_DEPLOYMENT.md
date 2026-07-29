@@ -96,8 +96,7 @@ stopped, delete only the marker above and start the service.
 
 ## 4. First-start checks with wheels raised
 
-Keep drive wheels clear of the floor and keep the physical emergency stop
-within reach.
+Keep the drive wheels clear of the floor during these checks.
 
 ```bash
 ros2 node list

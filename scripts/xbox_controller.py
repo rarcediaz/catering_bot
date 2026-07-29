@@ -88,11 +88,11 @@ class XboxMover(Node):
         if self.FLIP_ANGULAR:
             target_angular *= -1
 
-        # Emergency stop (B button)
+        # Immediate joystick stop (B button)
         if self.joy.get_button(1):
             self.current_linear = 0.0
             self.current_angular = 0.0
-            self.get_logger().warn("!!! EMERGENCY STOP !!!")
+            self.get_logger().warn("Joystick stop requested.")
         else:
             lin_delta = (max_lin / self.RAMP_TIME_SEC) * dt
             ang_delta = (max_ang / self.RAMP_TIME_SEC) * dt

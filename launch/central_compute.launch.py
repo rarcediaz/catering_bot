@@ -2,11 +2,31 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def validate_central_mode(context):
+    use_slam = LaunchConfiguration('use_slam').perform(context).lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+    use_nav2 = LaunchConfiguration('use_nav2').perform(context).lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+    if use_slam and use_nav2:
+        raise RuntimeError(
+            'Central mapping and navigation modes are mutually exclusive: '
+            'SLAM and AMCL/Nav2 cannot run together.'
+        )
+    return []
 
 
 def generate_launch_description():
@@ -124,6 +144,7 @@ def generate_launch_description():
             default_value=default_display_map,
             description='Full path to the UI display map YAML file.'
         ),
+        OpaqueFunction(function=validate_central_mode),
         joystick,
         slam,
         nav2,

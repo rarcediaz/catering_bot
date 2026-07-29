@@ -49,8 +49,8 @@ already-streaming command from passing straight through a restart.
 
 The operator Stop button is a central-computer operation: it cancels the
 current Nav2 goal. Nav2 then stops or zeros `/cmd_vel_nav_raw`, and the Pi
-command/controller timeouts stop the motors. This is a navigation stop, not an
-emergency stop; a physical emergency-stop circuit is still required.
+command/controller timeouts stop the motors. This is a navigation stop and
+does not isolate motor power.
 
 ## Documents
 

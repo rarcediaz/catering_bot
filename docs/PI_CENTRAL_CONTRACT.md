@@ -32,7 +32,7 @@ reset.
 
 There is no `/robot/power_command` interface and there are no Reset, On, or
 mode commands in the Pi runtime. Stop is a navigation stop, not a substitute
-for a physical emergency stop or motor-power isolation.
+for motor-power isolation.
 
 ## Outputs from the Pi
 
@@ -42,6 +42,7 @@ for a physical emergency stop or motor-power isolation.
 | `/scan_filtered` | `sensor_msgs/msg/LaserScan` | canonicalizer + local laser filter chain |
 | `/diff_cont/odom` | `nav_msgs/msg/Odometry` | `diff_drive_controller` |
 | `/joint_states` | `sensor_msgs/msg/JointState` | joint-state broadcaster |
+| `/battery_state` | `sensor_msgs/msg/BatteryState` | motor hardware interface battery telemetry |
 | `/tf` | `tf2_msgs/msg/TFMessage` | diff-drive controller and robot-state publisher |
 | `/tf_static` | `tf2_msgs/msg/TFMessage` | robot-state publisher |
 | `/robot_health/front_obstacle_active` | `std_msgs/msg/Bool` | obstacle safety node |
@@ -63,6 +64,11 @@ fresh locally filtered scans, odometry, joint states, and obstacle-safety
 health have all been observed and the automatic startup safety gate is open.
 It is reporting only; a brief DDS discovery delay does not restart the
 hardware service.
+
+Mission Control may display the age of the most recently received
+`/robot_health/ready` sample as **signal age**. This is a freshness indicator,
+not a network round-trip-time measurement and does not require a Pi command or
+ping topic.
 
 ## Command ownership and timeouts
 
