@@ -120,16 +120,14 @@ collect_legacy_robot_pids() {
       pid = $1
       process_name = $2
       command = substr($0, index($0, $3))
-      if (
-        pid == current_pid ||
+      if (pid == current_pid ||
         pid == parent_pid ||
         process_name == "awk" ||
         process_name == "ps"
       ) {
         next
       }
-      if (
-        command ~ /ros2 launch my_bot rpi_(autonomy|robot)\.launch\.py/ ||
+      if (command ~ /ros2 launch my_bot rpi_(autonomy|robot)\.launch\.py/ ||
         index(command, workspace "/install/my_bot/lib/my_bot/") > 0 ||
         index(command, workspace "/install/ydlidar_ros2_driver/") > 0 ||
         command ~ /\/lib\/controller_manager\/ros2_control_node/ ||
@@ -162,6 +160,21 @@ collect_cleanup_pids() {
     collect_legacy_robot_pids
     collect_device_owner_pids
   } | sort -nu
+}
+
+read_cleanup_pids() {
+  local output_name="$1"
+  local collected_pids
+  local -n output_ref="${output_name}"
+
+  if ! collected_pids="$(collect_cleanup_pids)"; then
+    return 1
+  fi
+
+  output_ref=()
+  if [[ -n "${collected_pids}" ]]; then
+    mapfile -t output_ref <<<"${collected_pids}"
+  fi
 }
 
 signal_pid_list() {
@@ -206,23 +219,35 @@ perform_initial_clean_start() {
   fi
 
   echo "Performing the initial clean-slate sweep for robot and legacy autonomy processes."
-  mapfile -t cleanup_pids < <(collect_cleanup_pids)
+  if ! read_cleanup_pids cleanup_pids; then
+    echo "Initial clean-slate process discovery failed; refusing to continue." >&2
+    exit 1
+  fi
   if (( ${#cleanup_pids[@]} > 0 )); then
     echo "Stopping existing robot process/device owner PID(s): ${cleanup_pids[*]}"
     signal_pid_list INT "${cleanup_pids[@]}"
     wait_for_pid_list 10 "${cleanup_pids[@]}"
-    mapfile -t cleanup_pids < <(collect_cleanup_pids)
+    if ! read_cleanup_pids cleanup_pids; then
+      echo "Initial clean-slate verification failed after SIGINT." >&2
+      exit 1
+    fi
   fi
   if (( ${#cleanup_pids[@]} > 0 )); then
     signal_pid_list TERM "${cleanup_pids[@]}"
     wait_for_pid_list 10 "${cleanup_pids[@]}"
-    mapfile -t cleanup_pids < <(collect_cleanup_pids)
+    if ! read_cleanup_pids cleanup_pids; then
+      echo "Initial clean-slate verification failed after SIGTERM." >&2
+      exit 1
+    fi
   fi
   if (( ${#cleanup_pids[@]} > 0 )); then
     echo "Force-stopping unresponsive robot processes: ${cleanup_pids[*]}" >&2
     signal_pid_list KILL "${cleanup_pids[@]}"
     wait_for_pid_list 6 "${cleanup_pids[@]}"
-    mapfile -t cleanup_pids < <(collect_cleanup_pids)
+    if ! read_cleanup_pids cleanup_pids; then
+      echo "Initial clean-slate verification failed after SIGKILL." >&2
+      exit 1
+    fi
   fi
   if (( ${#cleanup_pids[@]} > 0 )); then
     echo "Initial clean-slate sweep failed; PID(s) remain: ${cleanup_pids[*]}" >&2
