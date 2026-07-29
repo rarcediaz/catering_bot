@@ -26,6 +26,8 @@ def test_systemd_selects_only_production_hardware_launch():
     assert 'collect_device_owner_pids' in wrapper
     assert 'read_cleanup_pids' in wrapper
     assert 'process discovery failed; refusing to continue' in wrapper
+    assert 'if ! legacy_robot_pids="$(collect_legacy_robot_pids)"' in wrapper
+    assert 'if ! device_owner_pids="$(collect_device_owner_pids)"' in wrapper
 
 
 def test_production_launch_closure_has_no_central_compute_nodes():

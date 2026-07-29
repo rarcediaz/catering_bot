@@ -123,8 +123,7 @@ collect_legacy_robot_pids() {
       if (pid == current_pid ||
         pid == parent_pid ||
         process_name == "awk" ||
-        process_name == "ps"
-      ) {
+        process_name == "ps") {
         next
       }
       if (command ~ /ros2 launch my_bot rpi_(autonomy|robot)\.launch\.py/ ||
@@ -138,8 +137,7 @@ collect_legacy_robot_pids() {
         command ~ /\/lib\/slam_toolbox\// ||
         command ~ /\/lib\/rviz2\/rviz2/ ||
         command ~ /__node:=amcl/ ||
-        command ~ /__node:=(map_server|display_map_server)/
-      ) {
+        command ~ /__node:=(map_server|display_map_server)/) {
         print pid
       }
     }
@@ -156,9 +154,23 @@ collect_device_owner_pids() {
 }
 
 collect_cleanup_pids() {
+  local device_owner_pids
+  local legacy_robot_pids
+
+  if ! legacy_robot_pids="$(collect_legacy_robot_pids)"; then
+    return 1
+  fi
+  if ! device_owner_pids="$(collect_device_owner_pids)"; then
+    return 1
+  fi
+
   {
-    collect_legacy_robot_pids
-    collect_device_owner_pids
+    if [[ -n "${legacy_robot_pids}" ]]; then
+      printf '%s\n' "${legacy_robot_pids}"
+    fi
+    if [[ -n "${device_owner_pids}" ]]; then
+      printf '%s\n' "${device_owner_pids}"
+    fi
   } | sort -nu
 }
 
