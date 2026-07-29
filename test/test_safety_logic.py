@@ -114,3 +114,6 @@ def test_startup_gate_opens_automatically_after_a_quiet_period():
     assert node.latest_joy_time is None
     assert node.latest_nav_time is None
     assert node.nav_was_active is False
+    assert len(node.joy_gate_pub.messages) == 1
+    assert node.joy_gate_pub.messages[0].linear.x == 0.0
+    assert node.joy_gate_pub.messages[0].angular.z == 0.0

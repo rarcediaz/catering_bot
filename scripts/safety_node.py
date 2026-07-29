@@ -323,6 +323,7 @@ class ObstacleSafetyNode(Node):
             self.speed_limit_scale_pub.publish(Float32(data=0.0))
             return
 
+        joy_active = self.is_joy_active()
         nav_active = self.is_nav_active()
 
         if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):
@@ -333,6 +334,8 @@ class ObstacleSafetyNode(Node):
 
         if not nav_active:
             self.nav_gate_pub.publish(Twist())
+        if not joy_active:
+            self.joy_gate_pub.publish(Twist())
 
         if now < self.nav_stop_hold_until:
             self.safety_cmd_pub.publish(Twist())

@@ -98,6 +98,8 @@ def test_restart_and_sensor_loss_are_fail_safe():
     assert 'not self.startup_gate_open or not self.is_scan_healthy()' in safety
     assert "declare_parameter('scan_timeout_sec', 0.5)" in safety
     assert 'not self.is_scan_healthy()' in safety
+    assert 'if not joy_active:' in safety
+    assert 'self.joy_gate_pub.publish(Twist())' in safety
     assert "'/robot/power_command'" not in safety
     assert 'RESET' not in safety
 
