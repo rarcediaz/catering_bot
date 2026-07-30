@@ -42,6 +42,11 @@ last. Missing raw commands, a failed safety node, stale filtered scans, the
 controller command timeout, and the Arduino firmware watchdog all fail toward
 zero velocity.
 
+Phone recovery commands go through the central Mission Control API and enter
+this path only at `/cmd_vel_joy`. Mission Control checks live Pi safety
+readiness and pauses an active Nav2 mission before accepting nonzero manual
+motion. The mission remains paused until an operator deliberately resumes it.
+
 There is no Reset/On command or Pi-side operator latch. On every safety-node
 start, motion is inhibited automatically until filtered lidar is fresh and no
 active raw motion command has been observed for five seconds. This prevents an
@@ -56,7 +61,7 @@ does not isolate motor power.
 
 - [Pi-to-central topic and TF contract](docs/PI_CENTRAL_CONTRACT.md)
 - [Pi deployment and hardware acceptance](docs/PI_DEPLOYMENT.md)
-- [Disabled Phase 2 Wi-Fi access-point design](docs/WIFI_AP_PHASE2.md)
+- [Pi-hosted Wi-Fi and recovery-safe facility provisioning](docs/WIFI_AP_PHASE2.md)
 
 ## Service summary
 
@@ -91,16 +96,20 @@ remain the independent backstops.
 
 ## How Wi-Fi relates to the robot stack
 
-Wi-Fi is not a ROS node and is not started by `rpi_robot.launch.py`. The Phase
-2 access point is currently disabled. Once its reviewed NetworkManager profile
-is explicitly installed, NetworkManager starts the AP automatically during Pi
-boot because the profile has `autoconnect=true`. The ROS hardware service
-starts independently and may be running before Wi-Fi is ready.
+Wi-Fi is not a ROS node and is not started by `rpi_robot.launch.py`. The
+recovery AP and its separate provisioning service must be installed and
+enabled explicitly. NetworkManager then owns AP/facility selection during Pi
+boot, while the ROS hardware service starts independently and may be running
+before Wi-Fi is ready.
 
-The central computer and phone then join the Pi-hosted network. DDS discovers
-the central computer when the network appears; a Wi-Fi failure removes remote
-commands but does not stop the local lidar, safety, controller, or firmware
-watchdogs. See [the Phase 2 boot flow](docs/WIFI_AP_PHASE2.md#boot-order-and-stack-relationship).
+From the AP, `http://10.42.0.1:8090/` can save a facility profile without
+switching. A later switch uses a NetworkManager checkpoint and automatically
+restores the AP unless the new network is confirmed from the Windows central
+computer. The same page can instead keep the AP permanently and update the Pi
+and Windows DDS peers for `10.42.0.0/24` without switching Wi-Fi. A Wi-Fi
+failure removes remote commands but does not stop the local lidar, safety,
+controller, or firmware watchdogs. See
+[the provisioning flow](docs/WIFI_AP_PHASE2.md).
 
 Never run `launch_robot.launch.py` directly in production. It is an internal
 include without the top-level hardware lock.

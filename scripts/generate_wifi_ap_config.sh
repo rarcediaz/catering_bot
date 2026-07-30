@@ -10,6 +10,8 @@ ROBOT_AP_ADDRESS_CIDR="${ROBOT_AP_ADDRESS_CIDR:-10.42.0.1/24}"
 ROBOT_AP_COUNTRY="${ROBOT_AP_COUNTRY:-CA}"
 ROBOT_AP_CONNECTION_NAME="${ROBOT_AP_CONNECTION_NAME:-intellitrolley-ap}"
 ROBOT_AP_PSK_FILE="${ROBOT_AP_PSK_FILE:-}"
+ROBOT_AP_BAND="${ROBOT_AP_BAND:-bg}"
+ROBOT_AP_CHANNEL="${ROBOT_AP_CHANNEL:-6}"
 
 usage() {
   cat <<'EOF'
@@ -25,6 +27,8 @@ Configuration environment variables:
   ROBOT_AP_COUNTRY          default: CA
   ROBOT_AP_CONNECTION_NAME  default: intellitrolley-ap
   ROBOT_AP_PSK_FILE         required only with --output-dir
+  ROBOT_AP_BAND             default: bg (2.4 GHz)
+  ROBOT_AP_CHANNEL          default: 6
 EOF
 }
 
@@ -96,6 +100,15 @@ if [[ ! "${ROBOT_AP_CONNECTION_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "Invalid ROBOT_AP_CONNECTION_NAME." >&2
   exit 2
 fi
+if [[ ! "${ROBOT_AP_BAND}" =~ ^(a|bg)$ ]]; then
+  echo "ROBOT_AP_BAND must be a (5 GHz) or bg (2.4 GHz)." >&2
+  exit 2
+fi
+if [[ ! "${ROBOT_AP_CHANNEL}" =~ ^[0-9]+$ ]] \
+    || (( ROBOT_AP_CHANNEL < 1 || ROBOT_AP_CHANNEL > 165 )); then
+  echo "ROBOT_AP_CHANNEL must be an integer between 1 and 165." >&2
+  exit 2
+fi
 python3 - "${ROBOT_AP_ADDRESS_CIDR}" <<'PY'
 import ipaddress
 import sys
@@ -116,6 +129,7 @@ Phase 2 Wi-Fi AP configuration preview (no changes made):
   Pi gateway/CIDR: ${ROBOT_AP_ADDRESS_CIDR}
   country:         ${ROBOT_AP_COUNTRY}
   connection:      ${ROBOT_AP_CONNECTION_NAME}
+  band/channel:    ${ROBOT_AP_BAND}/${ROBOT_AP_CHANNEL}
   DHCP/DNS:        NetworkManager IPv4 shared mode
   IPv6:            disabled for the robot-local profile
   password source: ROBOT_AP_PSK_FILE (never written to Git)
@@ -159,6 +173,10 @@ if (( ${#ap_psk} < 8 || ${#ap_psk} > 63 )); then
     exit 2
   fi
 fi
+if LC_ALL=C grep -q '[^ -~]' <<<"${ap_psk}"; then
+  echo "The AP password must contain printable ASCII characters only." >&2
+  exit 2
+fi
 
 mkdir -p "${OUTPUT_DIR}"
 config_path="${OUTPUT_DIR}/${ROBOT_AP_CONNECTION_NAME}.nmconnection"
@@ -169,12 +187,14 @@ umask 077
     "id=${ROBOT_AP_CONNECTION_NAME}" \
     'type=wifi' \
     "interface-name=${ROBOT_AP_INTERFACE}" \
-    'autoconnect=true' \
-    'autoconnect-priority=100' \
+    'autoconnect=false' \
+    'autoconnect-priority=50' \
     '' \
     '[wifi]' \
     'mode=ap' \
     "ssid=${ROBOT_AP_SSID}" \
+    "band=${ROBOT_AP_BAND}" \
+    "channel=${ROBOT_AP_CHANNEL}" \
     '' \
     '[wifi-security]' \
     'key-mgmt=wpa-psk' \

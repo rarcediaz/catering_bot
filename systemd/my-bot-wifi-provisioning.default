@@ -1,0 +1,17 @@
+# Runtime settings for my-bot-wifi-provisioning.service.
+#
+# This service does not change networking on startup. Mutations are accepted
+# only while the recovery AP below is active and the request originates from
+# that AP subnet.
+
+ROBOT_WIFI_INTERFACE=wlan0
+ROBOT_WIFI_AP_CONNECTION=intellitrolley-ap
+ROBOT_WIFI_AP_ADDRESS_CIDR=10.42.0.1/24
+ROBOT_WIFI_HOSTNAME=zrpi-desktop.local
+ROBOT_WIFI_PROVISION_BIND=0.0.0.0
+ROBOT_WIFI_PROVISION_PORT=8090
+ROBOT_WIFI_SWITCH_TIMEOUT_S=180
+ROBOT_WIFI_CONNECTIONS_DIR=/etc/NetworkManager/system-connections
+ROBOT_WIFI_STATE_DIR=/var/lib/my-bot-wifi-provisioning
+ROBOT_WIFI_ROBOT_DEFAULTS=/etc/default/my-bot-robot
+ROBOT_WIFI_ROBOT_SERVICE=my-bot-robot.service

@@ -42,7 +42,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY config description docs launch maps systemd worlds
+  DIRECTORY config description docs launch maps systemd wifi_provisioning_ui worlds
   DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
 )
@@ -57,7 +57,9 @@ install(
     scripts/nav2_startup_gate.py
     scripts/generate_cyclonedds_config.py
     scripts/generate_wifi_ap_config.sh
+    scripts/install_wifi_provisioning_service.sh
     scripts/start_robot_stack.sh
+    scripts/wifi_provisioning_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

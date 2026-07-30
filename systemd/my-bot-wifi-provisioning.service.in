@@ -1,0 +1,41 @@
+[Unit]
+Description=IntelliTrolley recovery Wi-Fi provisioning
+Documentation=file://@ROBOT_PACKAGE_DIR@/docs/WIFI_AP_PHASE2.md
+After=NetworkManager.service local-fs.target
+Wants=NetworkManager.service
+ConditionPathExists=/usr/bin/nmcli
+ConditionPathExists=@ROBOT_PACKAGE_DIR@/wifi_provisioning_ui/index.html
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=@ROBOT_PACKAGE_DIR@
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/default/my-bot-wifi-provisioning
+ExecStart=/usr/bin/python3 @ROBOT_PACKAGE_DIR@/scripts/wifi_provisioning_server.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/etc/NetworkManager/system-connections
+ReadWritePaths=/etc/default/my-bot-robot
+StateDirectory=my-bot-wifi-provisioning
+StateDirectoryMode=0700
+RuntimeDirectory=my-bot-wifi-provisioning
+RuntimeDirectoryMode=0700
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=my-bot-wifi-provisioning
+
+[Install]
+WantedBy=multi-user.target

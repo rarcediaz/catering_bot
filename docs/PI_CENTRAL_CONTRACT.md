@@ -22,6 +22,19 @@ the deployment requires an explicit interface or unicast peers.
 No remote node may publish `/cmd_vel_nav_safe`, `/cmd_vel_joy_safe`,
 `/cmd_vel_safety`, or `/diff_cont/cmd_vel_unstamped`.
 
+### Remote manual recovery
+
+The supported phone path is phone UI → central Mission Control API →
+`/cmd_vel_joy`. The phone never publishes ROS topics directly. Mission Control
+accepts nonzero recovery commands only while the live Pi hardware and safety
+signals are ready, pauses any active autonomous mission before manual motion,
+and leaves that mission paused after the manual command ends.
+
+The phone streams while a direction is held and sends zero on release, pointer
+cancellation, loss of focus, or page hiding. Loss of the phone connection is
+also safe: the raw manual timeout, mux timeout, controller timeout, and firmware
+watchdog all independently fail toward zero velocity.
+
 ## Central Stop contract
 
 The Stop button belongs to the central navigation application. It cancels the
