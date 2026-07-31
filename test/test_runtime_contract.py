@@ -164,6 +164,26 @@ def test_remote_navigation_stream_has_wifi_jitter_margin():
     assert 'self.create_timer(0.05, self.publish_safety_hold)' in safety
 
 
+def test_navigation_speed_ceiling_matches_hardware_limit():
+    nav2 = read('config/nav2_params.yaml')
+    controllers = read('config/my_controllers.yaml')
+
+    max_vel_x = float(re.search(r'max_vel_x:\s*([0-9.]+)', nav2).group(1))
+    max_speed_xy = float(re.search(r'max_speed_xy:\s*([0-9.]+)', nav2).group(1))
+    smoother_max = float(
+        re.search(r'max_velocity:\s*\[([0-9.]+),', nav2).group(1)
+    )
+    hardware_max = float(
+        re.search(r'linear\.x\.max_velocity:\s*([0-9.]+)', controllers).group(1)
+    )
+
+    assert max_vel_x == 0.70
+    assert max_speed_xy == 0.70
+    assert smoother_max == 0.70
+    assert hardware_max >= smoother_max
+    assert 'feedback: "OPEN_LOOP"' in nav2
+
+
 def test_localization_remains_recoverable_before_navigation_activation():
     central_launch = read('launch/central_compute.launch.py')
     nav2_launch = read('launch/nav2.launch.py')

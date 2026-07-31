@@ -158,11 +158,11 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: -0.35
       min_vel_y: 0.0
-      max_vel_x: 0.55
+      max_vel_x: 0.70
       max_vel_y: 0.0
       max_vel_theta: 1.57
       min_speed_xy: 0.03
-      max_speed_xy: 0.55
+      max_speed_xy: 0.70
       min_speed_theta: 0.05
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
@@ -373,8 +373,13 @@ velocity_smoother:
     enable_stamped_cmd_vel: false
     smoothing_frequency: 20.0
     scale_velocities: False
-    feedback: "CLOSED_LOOP"
-    max_velocity: [0.55, 0.0, 1.57]
+    # The physical odometry response lags each newly smoothed command. In
+    # CLOSED_LOOP mode that repeatedly reset the ramp to measured speed and
+    # held a 0.55 m/s request near 0.10 m/s indefinitely. OPEN_LOOP advances
+    # from the previous smoothed command; the Pi safety node and diff-drive
+    # controller still enforce local stopping and hardware limits.
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.70, 0.0, 1.57]
     min_velocity: [-0.35, 0.0, -1.57]
     max_accel: [0.35, 0.0, 1.80]
     max_decel: [-2.00, 0.0, -2.20]
