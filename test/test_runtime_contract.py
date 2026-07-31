@@ -184,6 +184,13 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
     assert 'feedback: "OPEN_LOOP"' in nav2
 
 
+def test_amcl_cannot_randomly_relocate_during_navigation():
+    nav2 = read('config/nav2_params.yaml')
+    assert re.search(r'recovery_alpha_fast:\s*0\.0\b', nav2)
+    assert re.search(r'recovery_alpha_slow:\s*0\.0\b', nav2)
+    assert 'explicit, stationary operator action' in nav2
+
+
 def test_localization_remains_recoverable_before_navigation_activation():
     central_launch = read('launch/central_compute.launch.py')
     nav2_launch = read('launch/nav2.launch.py')

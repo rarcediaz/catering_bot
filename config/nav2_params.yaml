@@ -25,10 +25,12 @@ amcl:
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    # Inject recovery particles when scan likelihood drops so AMCL can recover
-    # from wheel slip or a displaced pose instead of remaining confidently lost.
-    recovery_alpha_fast: 0.1
-    recovery_alpha_slow: 0.001
+    # Never inject random global particles during routine navigation. A brief
+    # scan mismatch previously let AMCL jump tens of metres into a similar
+    # looking corridor while reporting low covariance. Global localization
+    # remains available as an explicit, stationary operator action.
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     # Never reuse AMCL's previous estimate automatically. Localization starts
