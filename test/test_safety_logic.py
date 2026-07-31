@@ -40,6 +40,7 @@ class RecordingPublisher:
 def make_motion_tracking_node(command):
     node = make_safety_node()
     node.latest_nav_cmd = command
+    node.joy_was_active = False
     node.command_epsilon = 0.005
     node.nav_was_active = False
     node.nav_stop_hold_until = 0.0
@@ -133,8 +134,32 @@ def test_pi_timer_republishes_latest_lidar_constrained_navigation_command():
 
     assert node.nav_gate_pub.messages[-1].linear.x == 0.4
     assert node.nav_gate_pub.messages[-1].angular.z == -0.2
-    assert node.joy_gate_pub.messages[-1].linear.x == 0.0
-    assert node.joy_gate_pub.messages[-1].angular.z == 0.0
+    assert node.joy_gate_pub.messages == []
+
+
+def test_expired_joystick_publishes_one_stop_then_releases_mux_ownership():
+    node = make_motion_tracking_node(make_command(linear=0.4))
+    node.latest_joy_cmd = make_command(linear=0.2)
+    node.joy_was_active = True
+    node.startup_quiet_until = 0.0
+    node.scan_was_healthy = True
+    node.is_nav_active = lambda: True
+    node.is_joy_active = lambda: False
+    node.obstacle_health_pub = RecordingPublisher()
+    node.startup_gate_pub = RecordingPublisher()
+    node.nav_gate_pub = RecordingPublisher()
+    node.joy_gate_pub = RecordingPublisher()
+    node.safety_cmd_pub = RecordingPublisher()
+    node.speed_limit_scale_pub = RecordingPublisher()
+    node.send_log = lambda *_args, **_kwargs: None
+
+    node.publish_safety_hold()
+    node.publish_safety_hold()
+
+    assert len(node.joy_gate_pub.messages) == 1
+    assert node.joy_gate_pub.messages[0].linear.x == 0.0
+    assert node.joy_gate_pub.messages[0].angular.z == 0.0
+    assert node.joy_was_active is False
 
 
 def test_startup_gate_opens_automatically_after_a_quiet_period():
@@ -144,6 +169,7 @@ def test_startup_gate_opens_automatically_after_a_quiet_period():
     node.latest_nav_time = 1.0
     node.latest_joy_cmd = Twist()
     node.latest_nav_cmd = Twist()
+    node.joy_was_active = False
     node.joystick_timeout_sec = 0.0
     node.nav_timeout_sec = 0.0
     node.startup_quiet_until = 0.0
@@ -168,6 +194,4 @@ def test_startup_gate_opens_automatically_after_a_quiet_period():
     assert node.latest_joy_time is None
     assert node.latest_nav_time is None
     assert node.nav_was_active is False
-    assert len(node.joy_gate_pub.messages) == 1
-    assert node.joy_gate_pub.messages[0].linear.x == 0.0
-    assert node.joy_gate_pub.messages[0].angular.z == 0.0
+    assert node.joy_gate_pub.messages == []

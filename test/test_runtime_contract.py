@@ -99,7 +99,9 @@ def test_restart_and_sensor_loss_are_fail_safe():
     assert "declare_parameter('scan_timeout_sec', 0.5)" in safety
     assert 'not self.is_scan_healthy()' in safety
     assert 'if joy_active:' in safety
-    assert 'else:\n            self.joy_gate_pub.publish(Twist())' in safety
+    assert 'elif self.joy_was_active:' in safety
+    assert 'Continuously publishing inactive joystick zeros' in safety
+    assert 'else:\n            self.joy_gate_pub.publish(Twist())' not in safety
     assert 'self.joy_gate_pub.publish(Twist())' in safety
     assert "'/robot/power_command'" not in safety
     assert 'RESET' not in safety
@@ -160,6 +162,32 @@ def test_remote_navigation_stream_has_wifi_jitter_margin():
     assert "'nav_timeout_sec': nav_timeout_sec" in safety_launch
     assert "default_value='0.50'" in safety_launch
     assert 'self.create_timer(0.05, self.publish_safety_hold)' in safety
+
+
+def test_localization_remains_recoverable_before_navigation_activation():
+    central_launch = read('launch/central_compute.launch.py')
+    nav2_launch = read('launch/nav2.launch.py')
+    startup_gate = read('scripts/nav2_startup_gate.py')
+
+    assert "isolate_localization = LaunchConfiguration('isolate_localization')" in (
+        central_launch
+    )
+    assert "'isolate_localization': isolate_localization" in central_launch
+    assert re.search(
+        r"DeclareLaunchArgument\(\s*'isolate_localization',\s*"
+        r"default_value='true'",
+        central_launch,
+    )
+    assert re.search(
+        r"DeclareLaunchArgument\(\s*'isolate_localization',\s*"
+        r"default_value='true'",
+        nav2_launch,
+    )
+    assert "'autostart': 'true'" in nav2_launch
+    assert "'autostart': False" in nav2_launch
+    assert "executable='nav2_startup_gate.py'" in nav2_launch
+    assert 'not self._localized' in startup_gate
+    assert 'Navigation lifecycle startup was not successful. Retrying.' in startup_gate
 
 
 def test_serial_devices_are_launch_parameters():

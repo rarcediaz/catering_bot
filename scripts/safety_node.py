@@ -75,6 +75,7 @@ class ObstacleSafetyNode(Node):
         self.latest_joy_time = None
         self.latest_nav_time = None
         self.latest_scan_time = None
+        self.joy_was_active = False
         self.nav_was_active = False
         self.nav_stop_hold_until = 0.0
         self.startup_gate_open = False
@@ -217,12 +218,15 @@ class ObstacleSafetyNode(Node):
                 )
             self.joy_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
+            self.joy_was_active = False
             return
         if not self.is_scan_healthy():
             self.joy_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
+            self.joy_was_active = False
             return
         self.joy_gate_pub.publish(self.apply_motion_constraints(msg))
+        self.joy_was_active = True
 
     def nav_cmd_callback(self, msg):
         self.latest_nav_cmd = msg
@@ -326,6 +330,7 @@ class ObstacleSafetyNode(Node):
             self.startup_gate_open = True
             self.latest_joy_time = None
             self.latest_nav_time = None
+            self.joy_was_active = False
             self.nav_was_active = False
             self.send_log(
                 'Startup safety gate opened automatically; fresh commands may '
@@ -337,6 +342,7 @@ class ObstacleSafetyNode(Node):
             self.nav_gate_pub.publish(Twist())
             self.joy_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
+            self.joy_was_active = False
             self.speed_limit_scale_pub.publish(Float32(data=0.0))
             return
 
@@ -363,8 +369,13 @@ class ObstacleSafetyNode(Node):
             self.joy_gate_pub.publish(
                 self.apply_motion_constraints(self.latest_joy_cmd)
             )
-        else:
+            self.joy_was_active = True
+        elif self.joy_was_active:
+            # Release manual ownership with one explicit stop, then remain
+            # silent. Continuously publishing inactive joystick zeros would
+            # starve lower-priority navigation at twist_mux.
             self.joy_gate_pub.publish(Twist())
+            self.joy_was_active = False
 
         if now < self.nav_stop_hold_until:
             self.safety_cmd_pub.publish(Twist())
@@ -473,6 +484,7 @@ class ObstacleSafetyNode(Node):
             self.nav_gate_pub.publish(self.apply_motion_constraints(self.latest_nav_cmd))
         if self.is_joy_active():
             self.joy_gate_pub.publish(self.apply_motion_constraints(self.latest_joy_cmd))
+            self.joy_was_active = True
 
         self.log_obstacle_transition(
             front_obstacle_detected,

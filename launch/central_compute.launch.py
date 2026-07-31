@@ -41,6 +41,7 @@ def generate_launch_description():
     display_map_file = LaunchConfiguration('display_map')
     use_keepout = LaunchConfiguration('use_keepout')
     use_display_map = LaunchConfiguration('use_display_map')
+    isolate_localization = LaunchConfiguration('isolate_localization')
 
     package_share = get_package_share_directory(package_name)
     cyclonedds_uri = f'file://{os.path.join(package_share, "config", "cyclonedds.xml")}'
@@ -76,6 +77,7 @@ def generate_launch_description():
             'keepout_mask': keepout_mask_file,
             'use_display_map': use_display_map,
             'display_map': display_map_file,
+            'isolate_localization': isolate_localization,
         }.items(),
         condition=IfCondition(use_nav2),
     )
@@ -113,6 +115,14 @@ def generate_launch_description():
             'use_nav2',
             default_value='false',
             description='Launch Nav2 on the central computer.'
+        ),
+        DeclareLaunchArgument(
+            'isolate_localization',
+            default_value='true',
+            description=(
+                'Keep map_server and AMCL active while navigation waits for '
+                'localization, allowing the operator to retry indefinitely.'
+            )
         ),
         DeclareLaunchArgument(
             'use_rviz',
