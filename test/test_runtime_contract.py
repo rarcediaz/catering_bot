@@ -98,7 +98,8 @@ def test_restart_and_sensor_loss_are_fail_safe():
     assert 'not self.startup_gate_open or not self.is_scan_healthy()' in safety
     assert "declare_parameter('scan_timeout_sec', 0.5)" in safety
     assert 'not self.is_scan_healthy()' in safety
-    assert 'if not joy_active:' in safety
+    assert 'if joy_active:' in safety
+    assert 'else:\n            self.joy_gate_pub.publish(Twist())' in safety
     assert 'self.joy_gate_pub.publish(Twist())' in safety
     assert "'/robot/power_command'" not in safety
     assert 'RESET' not in safety
@@ -128,6 +129,37 @@ def test_controller_and_firmware_timeouts_are_short():
     )
     assert controller_timeout <= 0.25
     assert firmware_timeout_ms <= 200
+
+
+def test_remote_navigation_stream_has_wifi_jitter_margin():
+    nav2 = read('config/nav2_params.yaml')
+    safety = read('scripts/safety_node.py')
+    safety_launch = read('launch/safety.launch.py')
+
+    controller_frequency = float(
+        re.search(r'controller_frequency:\s*([0-9.]+)', nav2).group(1)
+    )
+    smoothing_frequency = float(
+        re.search(r'smoothing_frequency:\s*([0-9.]+)', nav2).group(1)
+    )
+    velocity_timeout = float(
+        re.search(r'velocity_timeout:\s*([0-9.]+)', nav2).group(1)
+    )
+    nav_timeout = float(
+        re.search(
+            r"declare_parameter\('nav_timeout_sec',\s*([0-9.]+)\)",
+            safety,
+        ).group(1)
+    )
+
+    assert controller_frequency >= 20.0
+    assert smoothing_frequency >= 20.0
+    assert velocity_timeout >= 0.5
+    assert nav_timeout >= 0.5
+    assert "nav_timeout_sec = LaunchConfiguration('nav_timeout_sec')" in safety_launch
+    assert "'nav_timeout_sec': nav_timeout_sec" in safety_launch
+    assert "default_value='0.50'" in safety_launch
+    assert 'self.create_timer(0.05, self.publish_safety_hold)' in safety
 
 
 def test_serial_devices_are_launch_parameters():

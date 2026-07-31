@@ -26,7 +26,10 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('side_stop_distance_m', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.25)
-        self.declare_parameter('nav_timeout_sec', 0.25)
+        # Navigation crosses Wi-Fi/DDS. Keep enough jitter margin to bridge a
+        # short network pause while this Pi-local node continues enforcing
+        # fresh lidar constraints.
+        self.declare_parameter('nav_timeout_sec', 0.50)
         self.declare_parameter('nav_stop_hold_sec', 0.5)
         self.declare_parameter('scan_timeout_sec', 0.5)
         self.declare_parameter('startup_quiet_sec', 5.0)
@@ -190,6 +193,20 @@ class ObstacleSafetyNode(Node):
             return self.latest_nav_cmd
         return None
 
+    def update_nav_motion_state(self, now, nav_active):
+        """Track a lost moving stream without holding intentional zero commands."""
+        if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):
+            self.nav_was_active = True
+        elif not nav_active and self.nav_was_active:
+            self.nav_was_active = False
+            self.nav_stop_hold_until = now + self.nav_stop_hold_sec
+            return True
+        elif nav_active:
+            # A fresh zero is an intentional Nav2 stop. Forward it immediately
+            # without turning it into an additional high-priority stop hold.
+            self.nav_was_active = False
+        return False
+
     def joy_cmd_callback(self, msg):
         self.latest_joy_cmd = msg
         self.latest_joy_time = time.monotonic()
@@ -326,15 +343,27 @@ class ObstacleSafetyNode(Node):
         joy_active = self.is_joy_active()
         nav_active = self.is_nav_active()
 
-        if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):
-            self.nav_was_active = True
-        elif self.nav_was_active:
-            self.nav_was_active = False
-            self.nav_stop_hold_until = now + self.nav_stop_hold_sec
+        if self.update_nav_motion_state(now, nav_active):
+            self.send_log(
+                'Navigation command stream timed out after '
+                f'{self.nav_timeout_sec:.2f}s; Pi-local stop hold engaged.',
+                is_crit=True,
+            )
 
-        if not nav_active:
+        if nav_active:
+            # Re-publish at the Pi-local 20 Hz safety rate. During a brief DDS
+            # gap this keeps the downstream mux/controller fed while every
+            # command is still constrained by the latest local lidar scan.
+            self.nav_gate_pub.publish(
+                self.apply_motion_constraints(self.latest_nav_cmd)
+            )
+        else:
             self.nav_gate_pub.publish(Twist())
-        if not joy_active:
+        if joy_active:
+            self.joy_gate_pub.publish(
+                self.apply_motion_constraints(self.latest_joy_cmd)
+            )
+        else:
             self.joy_gate_pub.publish(Twist())
 
         if now < self.nav_stop_hold_until:

@@ -36,6 +36,7 @@ def generate_launch_description():
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
+    nav_timeout_sec = LaunchConfiguration('nav_timeout_sec')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
     scan_timeout_sec = LaunchConfiguration('scan_timeout_sec')
     startup_quiet_sec = LaunchConfiguration('startup_quiet_sec')
@@ -83,6 +84,7 @@ def generate_launch_description():
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'nav_timeout_sec': nav_timeout_sec,
             'nav_stop_hold_sec': nav_stop_hold_sec,
             'scan_timeout_sec': scan_timeout_sec,
             'startup_quiet_sec': startup_quiet_sec,
@@ -300,9 +302,20 @@ def generate_launch_description():
             description='Distance from lidar centerline to the robot side edge in meters.'
         ),
         DeclareLaunchArgument(
+            'nav_timeout_sec',
+            default_value='0.50',
+            description=(
+                'Keep the latest navigation command through a short DDS/Wi-Fi '
+                'gap while fresh Pi-local lidar safety remains active.'
+            )
+        ),
+        DeclareLaunchArgument(
             'nav_stop_hold_sec',
             default_value='0.50',
-            description='High-priority zero-command hold time after navigation commands stop.'
+            description=(
+                'High-priority zero-command hold after a moving navigation '
+                'stream is lost, not after an intentional fresh zero.'
+            )
         ),
         DeclareLaunchArgument(
             'scan_timeout_sec',
