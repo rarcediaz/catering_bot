@@ -184,6 +184,36 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
     assert 'feedback: "OPEN_LOOP"' in nav2
 
 
+def test_navigation_finishes_by_position_without_a_final_heading_spin():
+    nav2 = read('config/nav2_params.yaml')
+
+    assert 'plugin: "nav2_controller::PositionGoalChecker"' in nav2
+    assert 'rotate_to_goal_heading: false' in nav2
+    assert re.search(r'xy_goal_tolerance:\s*0\.35\b', nav2)
+
+
+def test_navigation_turns_are_bounded_and_use_the_rotation_shim():
+    nav2 = read('config/nav2_params.yaml')
+    max_vel_theta = float(
+        re.search(r'max_vel_theta:\s*([0-9.]+)', nav2).group(1)
+    )
+    smoother_theta = float(
+        re.search(
+            r'max_velocity:\s*\[[0-9.]+,\s*0\.0,\s*([0-9.]+)\]',
+            nav2,
+        ).group(1)
+    )
+
+    assert (
+        'plugin: "nav2_rotation_shim_controller::RotationShimController"'
+        in nav2
+    )
+    assert 'primary_controller: "dwb_core::DWBLocalPlanner"' in nav2
+    assert re.search(r'rotate_to_heading_angular_vel:\s*0\.55\b', nav2)
+    assert max_vel_theta == 0.80
+    assert smoother_theta == max_vel_theta
+
+
 def test_amcl_cannot_randomly_relocate_during_navigation():
     nav2 = read('config/nav2_params.yaml')
     assert re.search(r'recovery_alpha_fast:\s*0\.0\b', nav2)

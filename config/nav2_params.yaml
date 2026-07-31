@@ -142,27 +142,35 @@ controller_server:
       required_movement_radius: 0.05
       movement_time_allowance: 30.0
     # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
     general_goal_checker:
       stateful: True
-      plugin: "nav2_controller::StoppedGoalChecker"
-      trans_stopped_velocity: 0.06
-      rot_stopped_velocity: 0.06
-      xy_goal_tolerance: 0.45
-      yaw_goal_tolerance: 0.35
+      # A catering stop is a position, not a docking pose. Ignoring goal yaw
+      # lets the robot retain the safest/easiest arrival heading instead of
+      # sweeping its long front end through a final in-place rotation.
+      plugin: "nav2_controller::PositionGoalChecker"
+      xy_goal_tolerance: 0.35
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      # Use a deliberate, collision-checked in-place turn when a new path is
+      # substantially behind the robot. This is more decisive than asking DWB
+      # to discover a slow turning arc, while remaining well below the old
+      # 1.57 rad/s angular ceiling.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.70
+      angular_disengage_threshold: 0.35
+      forward_sampling_distance: 0.50
+      rotate_to_heading_angular_vel: 0.55
+      max_angular_accel: 0.80
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
+      closed_loop: true
       debug_trajectory_details: True
       min_vel_x: -0.35
       min_vel_y: 0.0
       max_vel_x: 0.70
       max_vel_y: 0.0
-      max_vel_theta: 1.57
+      max_vel_theta: 0.80
       min_speed_xy: 0.03
       max_speed_xy: 0.70
       min_speed_theta: 0.05
@@ -170,10 +178,10 @@ controller_server:
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
       acc_lim_x: 0.35
       acc_lim_y: 0.0
-      acc_lim_theta: 1.80
+      acc_lim_theta: 1.00
       decel_lim_x: -0.50
       decel_lim_y: 0.0
-      decel_lim_theta: -2.20
+      decel_lim_theta: -1.20
       vx_samples: 16
       vy_samples: 5
       vtheta_samples: 40
@@ -181,7 +189,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.45
+      xy_goal_tolerance: 0.35
       trans_stopped_velocity: 0.06
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -381,10 +389,10 @@ velocity_smoother:
     # from the previous smoothed command; the Pi safety node and diff-drive
     # controller still enforce local stopping and hardware limits.
     feedback: "OPEN_LOOP"
-    max_velocity: [0.70, 0.0, 1.57]
-    min_velocity: [-0.35, 0.0, -1.57]
-    max_accel: [0.35, 0.0, 1.80]
-    max_decel: [-2.00, 0.0, -2.20]
+    max_velocity: [0.70, 0.0, 0.80]
+    min_velocity: [-0.35, 0.0, -0.80]
+    max_accel: [0.35, 0.0, 1.00]
+    max_decel: [-2.00, 0.0, -1.20]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
