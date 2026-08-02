@@ -122,13 +122,16 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
-            default_value='0.50',
-            description='Stop if an obstacle is within this forward distance in meters.'
+            default_value='0.20',
+            description=(
+                'Immediate Pi-local hard-stop clearance in meters; motion is '
+                'progressively slowed before reaching this boundary.'
+            )
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_max_m',
             default_value='0.60',
-            description='Maximum stop distance used at higher forward speeds.'
+            description='Clearance used to derive the progressive speed limit.'
         ),
         DeclareLaunchArgument(
             'obstacle_stop_speed_mps',

@@ -172,8 +172,7 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
     nav2 = read('config/nav2_params.yaml')
     controllers = read('config/my_controllers.yaml')
 
-    max_vel_x = float(re.search(r'max_vel_x:\s*([0-9.]+)', nav2).group(1))
-    max_speed_xy = float(re.search(r'max_speed_xy:\s*([0-9.]+)', nav2).group(1))
+    max_vel_x = float(re.search(r'vx_max:\s*([0-9.]+)', nav2).group(1))
     smoother_max = float(
         re.search(r'max_velocity:\s*\[([0-9.]+),', nav2).group(1)
     )
@@ -188,7 +187,6 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
     )
 
     assert max_vel_x == 0.70
-    assert max_speed_xy == 0.70
     assert smoother_max == 0.70
     assert hardware_max >= smoother_max
     assert smoother_min == -0.70
@@ -238,10 +236,22 @@ def test_rotation_counts_as_navigation_progress():
     assert re.search(r'movement_time_allowance:\s*30\.0\b', nav2)
 
 
-def test_navigation_prefers_front_lidar_direction_and_turns_are_bounded():
+def test_mppi_chooses_forward_or_reverse_without_heading_spin():
     nav2 = read('config/nav2_params.yaml')
+    controller_hz = float(
+        re.search(r'controller_frequency:\s*([0-9.]+)', nav2).group(1)
+    )
+    model_dt = float(
+        re.search(r'model_dt:\s*([0-9.]+)', nav2).group(1)
+    )
+    time_steps = int(
+        re.search(r'time_steps:\s*([0-9]+)', nav2).group(1)
+    )
+    max_vel_x = float(
+        re.search(r'vx_max:\s*([0-9.]+)', nav2).group(1)
+    )
     max_vel_theta = float(
-        re.search(r'max_vel_theta:\s*([0-9.]+)', nav2).group(1)
+        re.search(r'wz_max:\s*([0-9.]+)', nav2).group(1)
     )
     smoother_theta = float(
         re.search(
@@ -250,27 +260,28 @@ def test_navigation_prefers_front_lidar_direction_and_turns_are_bounded():
         ).group(1)
     )
 
-    assert 'plugin: "dwb_core::DWBLocalPlanner"' in nav2
+    assert 'plugin: "nav2_mppi_controller::MPPIController"' in nav2
+    assert 'dwb_core::DWBLocalPlanner' not in nav2
     assert 'RotationShimController' not in nav2
-    assert '"PathAlign"' in nav2
-    assert '"GoalAlign"' not in nav2
-    assert '"PreferForward"' in nav2
-    assert re.search(r'PreferForward\.scale:\s*2\.0\b', nav2)
-    assert re.search(r'PreferForward\.penalty:\s*1\.0\b', nav2)
-    assert re.search(r'PreferForward\.theta_scale:\s*0\.05\b', nav2)
-    assert re.search(r'PathAlign\.scale:\s*8\.0\b', nav2)
-    assert re.search(r'PathAlign\.forward_point_distance:\s*0\.25\b', nav2)
-    assert re.search(r'min_speed_theta:\s*0\.10\b', nav2)
-    assert re.search(r'Oscillation\.oscillation_reset_dist:\s*0\.05\b', nav2)
-    assert re.search(r'Oscillation\.oscillation_reset_angle:\s*0\.20\b', nav2)
-    assert re.search(r'Oscillation\.oscillation_reset_time:\s*-1\.0\b', nav2)
-    assert re.search(r'Oscillation\.x_only_threshold:\s*0\.05\b', nav2)
-    assert re.search(r'vx_samples:\s*13\b', nav2)
-    assert re.search(r'vtheta_samples:\s*21\b', nav2)
-    assert max_vel_theta == 1.00
+    assert re.search(
+        r'critics:\s*\["ConstraintCritic", "CostCritic", "GoalCritic", '
+        r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic"\]',
+        nav2,
+    )
+    assert not re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
+    assert not re.search(r'^\s+GoalAngleCritic:', nav2, re.MULTILINE)
+    assert not re.search(r'^\s+TwirlingCritic:', nav2, re.MULTILINE)
+    assert re.search(r'motion_model:\s*"DiffDrive"', nav2)
+    assert re.search(r'vx_min:\s*-0\.70\b', nav2)
+    assert re.search(r'forward_preference:\s*false\b', nav2)
+    assert re.search(r'use_path_orientations:\s*false\b', nav2)
+    assert controller_hz == 10.0
+    assert model_dt == 1.0 / controller_hz
+    # The predicted axle travel plus the front overhang remains inside the
+    # 2.5 m half-width of the rolling local costmap.
+    assert time_steps * model_dt * max_vel_x + 0.917 < 2.5
+    assert max_vel_theta == 0.80
     assert smoother_theta == max_vel_theta
-    assert re.search(r'acc_lim_theta:\s*1\.50\b', nav2)
-    assert re.search(r'decel_lim_theta:\s*-1\.80\b', nav2)
     assert re.search(r'max_accel:\s*\[0\.35,\s*0\.0,\s*1\.50\]', nav2)
     assert re.search(r'max_decel:\s*\[-2\.00,\s*0\.0,\s*-1\.80\]', nav2)
     assert re.search(r'max_rotational_vel:\s*0\.70\b', nav2)
@@ -302,10 +313,11 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
         ).group(1)
     )
 
-    assert '"ObstacleFootprint"' in nav2
-    assert '"BaseObstacle"' not in nav2
-    assert re.search(r'ObstacleFootprint\.scale:\s*0\.70\b', nav2)
-    assert re.search(r'ObstacleFootprint\.sum_scores:\s*false\b', nav2)
+    assert '"CostCritic"' in nav2
+    assert re.search(r'consider_footprint:\s*true\b', nav2)
+    assert re.search(r'collision_cost:\s*1000000\.0\b', nav2)
+    assert re.search(r'cost_weight:\s*2\.5\b', nav2)
+    assert re.search(r'inflation_layer_name:\s*"inflation_layer"', nav2)
     # Each costmap has ordinary obstacle inflation plus a second inflation
     # stage that runs after the keepout filter.
     assert inflation_radii == [0.60, 0.60, 0.60, 0.60]
@@ -318,15 +330,13 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
         '        plugin: "nav2_costmap_2d::InflationLayer"'
     ) == 2
     assert abs(inflation_radii[0] - (side_start + side_clearance)) <= 0.01
-    assert re.search(r'vx_samples:\s*13\b', nav2)
-    assert re.search(r'vtheta_samples:\s*21\b', nav2)
 
 
 def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
     nav2 = read('config/nav2_params.yaml')
 
     # Local control only bridges a missed scan so stale returns cannot trap
-    # DWB. The global planner retains the longer memory needed to route around
+    # MPPI. The global planner retains the longer memory needed to route around
     # intermittent chair-leg returns. This does not widen inflation.
     assert nav2.count('observation_persistence: 0.20') == 1
     assert nav2.count('observation_persistence: 0.75') == 1
@@ -343,10 +353,10 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     )
 
     assert re.search(r'controller_frequency:\s*10\.0\b', nav2)
-    assert re.search(r'min_vel_x:\s*-0\.70\b', nav2)
+    assert re.search(r'vx_min:\s*-0\.70\b', nav2)
     assert re.search(r'transform_tolerance:\s*0\.70\b', nav2)
     assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
-    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-1\.00\]', nav2)
+    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-0\.80\]', nav2)
     assert '<RateController hz="0.2">' in behavior_tree
     backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
     spin = '<Spin spin_dist="1.57"/>'
@@ -362,18 +372,28 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     )
     assert "'default_nav_to_pose_bt_xml': navigate_to_pose_bt_file" in nav2_launch
     assert 'DIRECTORY behavior_trees config description' in cmake
+    assert '<exec_depend>nav2_mppi_controller</exec_depend>' in read('package.xml')
 
 
 def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     safety = read('scripts/safety_node.py')
     contract = read('docs/PI_CENTRAL_CONTRACT.md')
+    launches = [
+        read('launch/rpi_robot.launch.py'),
+        read('launch/launch_robot.launch.py'),
+        read('launch/safety.launch.py'),
+    ]
 
-    # Physical odometry, rather than a still-high raw request, determines the
-    # emergency stopping distance. Clearance independently caps safe speed.
+    # The emergency boundary is fixed so odometry cannot create a stop/go
+    # feedback loop. Clearance independently caps safe speed.
     get_speed = safety[safety.index('def get_forward_speed_mps'):]
     get_speed = get_speed[:get_speed.index('def get_dynamic_stop_distance')]
     assert 'self.forward_speed_mps' in get_speed
     assert 'latest_nav_cmd' not in get_speed
+    get_stop = safety[safety.index('def get_dynamic_stop_distance'):]
+    get_stop = get_stop[:get_stop.index('def get_clearance_speed_scale')]
+    assert 'return self.obstacle_stop_distance_m, forward_speed' in get_stop
+    assert 'speed_ratio' not in get_stop
     assert 'def get_clearance_speed_scale' in safety
     assert 'def get_side_turn_scale' in safety
     assert "declare_parameter('side_hard_stop_distance_m', 0.03)" in safety
@@ -395,6 +415,11 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
 
     assert 'self.get_logger().warning(text)' in safety
     assert 'Navigation safety constraint active:' in safety
+    for launch in launches:
+        assert re.search(
+            r"'obstacle_stop_distance_m',\s*default_value='0\.20'",
+            launch,
+        )
 
 
 def test_amcl_cannot_randomly_relocate_during_navigation():

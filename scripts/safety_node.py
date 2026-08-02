@@ -327,17 +327,16 @@ class ObstacleSafetyNode(Node):
         return max(0.0, abs(self.forward_speed_mps))
 
     def get_dynamic_stop_distance(self):
-        forward_speed = self.get_forward_speed_mps()
-        max_distance = max(self.obstacle_stop_distance_m, self.obstacle_stop_distance_max_m)
-        if self.obstacle_stop_speed_mps <= 1e-3 or max_distance <= self.obstacle_stop_distance_m:
-            return self.obstacle_stop_distance_m, forward_speed
+        """Return the fixed hard boundary and measured speed for diagnostics.
 
-        speed_ratio = min(forward_speed / self.obstacle_stop_speed_mps, 1.0)
-        stop_distance = (
-            self.obstacle_stop_distance_m +
-            speed_ratio * (max_distance - self.obstacle_stop_distance_m)
-        )
-        return stop_distance, forward_speed
+        The hard-stop boundary must not grow and shrink with odometry. Doing
+        so creates a feedback loop: motion expands the boundary and triggers a
+        stop, the stop contracts it, and the same command is admitted again.
+        Speed is instead handled continuously by get_clearance_speed_scale(),
+        while this fixed boundary remains the final fail-closed protection.
+        """
+        forward_speed = self.get_forward_speed_mps()
+        return self.obstacle_stop_distance_m, forward_speed
 
     def get_clearance_speed_scale(self, clearance, command_speed):
         """Return a safe scale that converges instead of stop/start latching."""
@@ -411,8 +410,9 @@ class ObstacleSafetyNode(Node):
                 limited.linear.x,
             )
 
-        # DWB collision-checks a complete linear/angular trajectory. Scaling
-        # only its translation turns a safe arc into a different, unchecked
+        # The central controller collision-checks a complete linear/angular
+        # trajectory. Scaling only its translation turns a safe arc into a
+        # different, unchecked
         # rotation about the axle, which can sweep the long trolley footprint
         # into an obstacle or keepout boundary. Preserve the selected curvature
         # whenever front/rear clearance limits a translating command. Pure
@@ -421,11 +421,23 @@ class ObstacleSafetyNode(Node):
         if abs(cmd.linear.x) > self.command_epsilon:
             limited.angular.z *= translation_scale
 
-        if limited.angular.z > 0.0:
-            limited.angular.z *= self.left_turn_scale
+        side_turn_scale = 1.0
+        if cmd.angular.z > 0.0:
+            side_turn_scale = self.left_turn_scale
+        elif cmd.angular.z < 0.0:
+            side_turn_scale = self.right_turn_scale
 
-        if limited.angular.z < 0.0:
-            limited.angular.z *= self.right_turn_scale
+        # Side constraints must not straighten a collision-checked arc. That
+        # was the remaining path-deformation case: suppressing only angular
+        # velocity allowed the axle to continue on a different trajectory and
+        # carry the trolley footprint into occupied/keepout cells. Scale the
+        # complete twist for a translating arc; for a pure rotation, only the
+        # angular component exists to constrain.
+        if abs(cmd.linear.x) > self.command_epsilon:
+            limited.linear.x *= side_turn_scale
+            limited.angular.z *= side_turn_scale
+        else:
+            limited.angular.z *= side_turn_scale
 
         return limited
 
@@ -437,12 +449,18 @@ class ObstacleSafetyNode(Node):
         if raw_cmd.linear.x > self.command_epsilon:
             if self.front_obstacle_active:
                 return 'front_stop'
-            if safe_cmd.linear.x < raw_cmd.linear.x - self.command_epsilon:
+            if self.get_clearance_speed_scale(
+                self.closest_forward_clearance,
+                raw_cmd.linear.x,
+            ) < 1.0:
                 return 'front_slowdown'
         elif raw_cmd.linear.x < -self.command_epsilon:
             if self.rear_obstacle_active:
                 return 'rear_stop'
-            if safe_cmd.linear.x > raw_cmd.linear.x + self.command_epsilon:
+            if self.get_clearance_speed_scale(
+                self.closest_rear_clearance,
+                raw_cmd.linear.x,
+            ) < 1.0:
                 return 'rear_slowdown'
         if (
             raw_cmd.angular.z > self.command_epsilon and

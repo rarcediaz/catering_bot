@@ -129,9 +129,9 @@ controller_server:
     # Keep the remote command stream comfortably faster than the Pi-side
     # deadman timers so ordinary Wi-Fi scheduling jitter does not look like a
     # navigation failure.
-    # Full rectangular-footprint scoring consistently exceeded a 20 Hz cycle
-    # on the central computer. DWB runs at 10 Hz while velocity_smoother keeps
-    # publishing the accepted command to the Pi at 20 Hz.
+    # Full rectangular-footprint prediction is intentionally run at 10 Hz on
+    # the central computer. velocity_smoother keeps publishing the accepted
+    # command to the Pi at 20 Hz between controller updates.
     controller_frequency: 10.0
     publish_zero_velocity: true
     min_x_velocity_threshold: 0.001
@@ -162,98 +162,89 @@ controller_server:
       # sweeping its long front end through a final in-place rotation.
       plugin: "nav2_controller::PositionGoalChecker"
       xy_goal_tolerance: 0.35
-    # DWB parameters
+    # MPPI parameters
     FollowPath:
-      # Score motion directly around the drive axle. A rotation shim would
-      # force a turn before every path segment, so DWB instead prefers forward
-      # travel while retaining collision-checked reverse as a fallback.
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: False
-      # Keep reverse available during an ordinary mission when no safe forward
-      # trajectory exists. PreferForward below makes the front-lidar-covered
-      # direction the normal choice, and Pi safety independently rejects
-      # reverse whenever its rear sector is unsafe.
-      min_vel_x: -0.70
-      min_vel_y: 0.0
-      max_vel_x: 0.70
-      max_vel_y: 0.0
-      max_vel_theta: 1.00
-      min_speed_xy: 0.03
-      max_speed_xy: 0.70
-      # Permit small corrective turns near a path bend so the controller can
-      # converge without repeatedly overshooting and reversing direction.
-      # Pi-local side-clearance scaling can reduce this further near obstacles.
-      min_speed_theta: 0.10
-      # Add high threshold velocity for turtlebot 3 issue.
-      # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.35
-      acc_lim_y: 0.0
-      # Reach the selected turn rate promptly. These remain below the Pi
-      # hardware controller's angular acceleration limits, while Pi-local
-      # obstacle safety can still scale or stop the command at any instant.
-      acc_lim_theta: 1.50
-      decel_lim_x: -0.50
-      decel_lim_y: 0.0
-      decel_lim_theta: -1.80
-      # Footprint-aware scoring is more expensive than center-cell scoring.
-      # These samples preserve useful differential-drive choices while keeping
-      # the 20 Hz command stream inside the Pi deadman margin.
-      # Odd sample counts explicitly include zero linear and angular velocity,
-      # preserving straight and in-place choices without increasing the total
-      # trajectory workload.
-      vx_samples: 13
-      vy_samples: 5
-      vtheta_samples: 21
-      sim_time: 1.5
-      linear_granularity: 0.05
-      angular_granularity: 0.025
+      plugin: "nav2_mppi_controller::MPPIController"
+      # Match model_dt to the 10 Hz controller period. Twenty samples give a
+      # two-second horizon: 1.40 m at maximum speed, which keeps the trolley's
+      # 0.917 m forward overhang inside the 2.50 m local-costmap half-width.
+      time_steps: 20
+      model_dt: 0.10
+      batch_size: 1000
+      iteration_count: 1
+      # Explore decisive translation and rotation without allowing sampled
+      # commands beyond the physical navigation envelope.
+      vx_std: 0.35
+      vy_std: 0.0
+      wz_std: 0.50
+      vx_max: 0.70
+      vx_min: -0.70
+      vy_max: 0.0
+      wz_max: 0.80
+      temperature: 0.3
+      gamma: 0.015
+      retry_attempt_limit: 1
+      motion_model: "DiffDrive"
+      visualize: false
+      reset_period: 1.0
+      # Include enough NavFn path for every predicted trajectory while keeping
+      # the closest-path search within the rolling local costmap.
+      prune_distance: 2.0
       # Logs show occasional map/odom scheduling gaps approaching 0.60 s over
       # the robot Wi-Fi link. Absorb those without weakening the Pi's
       # independent command deadman or its fresh-lidar motion constraints.
       transform_tolerance: 0.70
-      xy_goal_tolerance: 0.35
-      trans_stopped_velocity: 0.06
-      short_circuit_trajectory_evaluation: True
-      stateful: True
-      # PathAlign gives DWB a stable direction along the route instead of
-      # allowing equivalent forward-left and reverse-right solutions to trade
-      # places at a bend. GoalAlign remains intentionally absent, so the final
-      # destination heading is still irrelevant. PreferForward is finite and
-      # therefore preserves collision-checked reverse as a fallback.
-      critics: ["Oscillation", "ObstacleFootprint", "PreferForward", "PathAlign", "PathDist", "GoalDist"]
-      # Use Humble's short reset thresholds. Larger custom values locked DWB
-      # into an initially poor turn direction until recovery took over.
-      Oscillation.oscillation_reset_dist: 0.05
-      Oscillation.oscillation_reset_angle: 0.20
-      Oscillation.oscillation_reset_time: -1.0
-      Oscillation.x_only_threshold: 0.05
-      # BaseObstacle only checks the center cell and is valid only for circular
-      # robots. ObstacleFootprint rejects collisions with the long trolley body
-      # and gives the Pi's 0.60 m side-safety envelope enough weight to prefer
-      # an outward arc before safety has to suppress a tight turn. Use the worst
-      # footprint cost instead of summing every sample along the trajectory:
-      # summing strongly penalized longer/faster valid trajectories and made
-      # the robot crawl or stop in open routes.
-      ObstacleFootprint.scale: 0.70
-      ObstacleFootprint.sum_scores: false
-      # Retain a mild preference for the front-lidar-covered direction without
-      # making a short, collision-checked reverse more expensive than a full
-      # open-space turnaround.
-      PreferForward.scale: 2.0
-      PreferForward.penalty: 1.0
-      PreferForward.strafe_x: 0.05
-      PreferForward.strafe_theta: 0.10
-      # PreferForward already applies a fixed penalty to reverse travel. Keep
-      # only a light angular penalty so it does not reward slow, drawn-out
-      # turns over a decisive path-alignment correction.
-      PreferForward.theta_scale: 0.05
-      # Project a point slightly ahead of the axle onto the route. This is far
-      # enough to disambiguate heading for the long trolley while remaining
-      # inside the wheelbase-scale region at tight path bends.
-      PathAlign.scale: 8.0
-      PathAlign.forward_point_distance: 0.25
-      PathDist.scale: 20.0
-      GoalDist.scale: 14.0
+      # There is deliberately no PreferForwardCritic: a route behind the axle
+      # should be driven in reverse instead of forcing an open-space U-turn.
+      # There is also no GoalAngleCritic, because catering stops are positions
+      # and must not trigger a final heading spin.
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        # Let the controller use safe narrow passages without weakening exact
+        # footprint collision rejection or the independent Pi safety layer.
+        cost_weight: 2.5
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        inflation_layer_name: "inflation_layer"
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 8.0
+        max_path_occupancy_ratio: 0.10
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 10
+        # NavFn does not encode a required travel direction in path yaw.
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 0.90
+        # Humble's bidirectional mode compares forward and mirrored headings,
+        # allowing MPPI to select the shorter collision-checked direction.
+        forward_preference: false
 
 local_costmap:
   local_costmap:
@@ -277,7 +268,7 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Match the Pi's ~0.59 m side-intervention envelope from the axle
         # center. The exact padded footprint still rejects collisions; this
-        # field guides DWB without making physically safe narrow aisles look
+        # field guides MPPI without making physically safe narrow aisles look
         # unusable.
         cost_scaling_factor: 4.0
         inflation_radius: 0.60
@@ -295,7 +286,7 @@ local_costmap:
         scan:
           topic: /scan_filtered
           # Bridge a single missed chair-leg return without repeatedly
-          # re-marking stale local obstacles long enough to trap DWB.
+          # re-marking stale local obstacles long enough to trap MPPI.
           observation_persistence: 0.20
           max_obstacle_height: 2.0
           clearing: True
@@ -435,7 +426,7 @@ behavior_server:
     use_sim_time: false
     simulate_ahead_time: 2.0
     # Recovery turns happen only after backing into clearance. Keep them below
-    # the normal DWB ceiling, but fast enough that a 90-degree recovery does
+    # the normal MPPI ceiling, but fast enough that a 90-degree recovery does
     # not spend several seconds crawling through the turn. Pi-local side
     # safety still scales or stops this command when clearance is insufficient.
     max_rotational_vel: 0.70
@@ -469,8 +460,8 @@ velocity_smoother:
     # from the previous smoothed command; the Pi safety node and diff-drive
     # controller still enforce local stopping and hardware limits.
     feedback: "OPEN_LOOP"
-    max_velocity: [0.70, 0.0, 1.00]
-    min_velocity: [-0.70, 0.0, -1.00]
+    max_velocity: [0.70, 0.0, 0.80]
+    min_velocity: [-0.70, 0.0, -0.80]
     max_accel: [0.35, 0.0, 1.50]
     max_decel: [-2.00, 0.0, -1.80]
     odom_topic: "/diff_cont/odom"

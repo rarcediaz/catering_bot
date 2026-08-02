@@ -106,16 +106,16 @@ def test_front_slowdown_scales_only_forward_motion():
     assert node.apply_motion_constraints(make_command(-0.4)).linear.x == -0.4
 
 
-def test_dynamic_stop_uses_odometry_and_allows_controlled_creep_after_stop():
+def test_hard_stop_boundary_is_fixed_and_allows_controlled_slowdown():
     node = make_safety_node()
     node.forward_speed_mps = 0.60
     stop_distance, measured_speed = node.get_dynamic_stop_distance()
-    assert stop_distance == 0.60
+    assert stop_distance == 0.20
     assert measured_speed == 0.60
 
-    # The raw command may remain at 0.70 m/s, but once odometry reaches zero
-    # the hard envelope returns to its configured minimum and the clearance
-    # limiter admits only a small, convergent command.
+    # The hard boundary does not move with odometry. The raw command may remain
+    # at 0.70 m/s, but the clearance limiter admits only a small, convergent
+    # command before that boundary is reached.
     node.forward_speed_mps = 0.0
     stop_distance, measured_speed = node.get_dynamic_stop_distance()
     assert stop_distance == 0.20
@@ -163,6 +163,21 @@ def test_side_obstacles_progressively_slow_only_turns_toward_them():
     ) == 'right_turn_slowdown'
 
 
+def test_side_slowdown_preserves_a_translating_arcs_curvature():
+    node = make_safety_node()
+    node.left_obstacle_active = True
+    node.left_turn_scale = 0.5
+
+    safe = node.apply_motion_constraints(make_command(0.4, 0.6))
+
+    assert safe.linear.x == 0.2
+    assert safe.angular.z == 0.3
+    assert safe.linear.x / 0.4 == safe.angular.z / 0.6
+    assert node.get_nav_constraint_reason(
+        make_command(0.4, 0.6), safe
+    ) == 'left_turn_slowdown'
+
+
 def test_side_turn_hard_stop_is_reserved_for_imminent_contact():
     node = make_safety_node()
     node.right_obstacle_active = True
@@ -178,6 +193,14 @@ def test_side_turn_hard_stop_is_reserved_for_imminent_contact():
     assert node.apply_motion_constraints(
         make_command(angular=-0.5)
     ).angular.z < 0.0
+
+    node.right_turn_scale = 0.0
+    stopped_arc = node.apply_motion_constraints(make_command(0.3, -0.5))
+    assert stopped_arc.linear.x == 0.0
+    assert stopped_arc.angular.z == 0.0
+    assert node.get_nav_constraint_reason(
+        make_command(0.3, -0.5), stopped_arc
+    ) == 'right_turn_stop'
 
 
 def test_rear_obstacle_blocks_reverse_but_allows_forward():
