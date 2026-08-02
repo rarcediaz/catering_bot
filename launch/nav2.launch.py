@@ -33,10 +33,16 @@ def generate_launch_description():
         'config',
         'nav2_params.yaml'
     )
+    navigate_to_pose_bt_file = os.path.join(
+        package_share,
+        'behavior_trees',
+        'navigate_to_pose_stable_replanning.xml'
+    )
     params_file = LaunchConfiguration('params_file')
     configured_params = RewrittenYaml(
         source_file=params_file,
         param_rewrites={
+            'default_nav_to_pose_bt_xml': navigate_to_pose_bt_file,
             'local_costmap.local_costmap.ros__parameters.keepout_filter.enabled': use_keepout,
             'global_costmap.global_costmap.ros__parameters.keepout_filter.enabled': use_keepout,
         },
@@ -83,7 +89,9 @@ def generate_launch_description():
                 plugin='behavior_server::BehaviorServer',
                 name='behavior_server',
                 parameters=[configured_params],
-                remappings=nav2_remappings,
+                # Recovery motion must follow the same velocity smoother and
+                # Pi-local lidar safety path as the normal path controller.
+                remappings=nav2_remappings + [('cmd_vel', 'cmd_vel_nav')],
             ),
             ComposableNode(
                 package='nav2_bt_navigator',

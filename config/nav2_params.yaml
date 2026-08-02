@@ -58,10 +58,11 @@ bt_navigator:
     bt_loop_duration: 50
     default_server_timeout: 20
     wait_for_service_timeout: 1000
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    # nav2.launch.py supplies the package-installed NavigateToPose tree. It
+    # retains Nav2's recovery behavior but limits global path replacement to
+    # once every two seconds so small plan changes cannot flip local control.
+    # This leaf must exist for RewrittenYaml to replace it at launch.
+    default_nav_to_pose_bt_xml: "NAVIGATE_TO_POSE_BT_XML_IS_SET_BY_LAUNCH"
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
@@ -126,12 +127,18 @@ controller_server:
     # Keep the remote command stream comfortably faster than the Pi-side
     # deadman timers so ordinary Wi-Fi scheduling jitter does not look like a
     # navigation failure.
-    controller_frequency: 20.0
+    # Full rectangular-footprint scoring consistently exceeded a 20 Hz cycle
+    # on the central computer. DWB runs at 10 Hz while velocity_smoother keeps
+    # publishing the accepted command to the Pi at 20 Hz.
+    controller_frequency: 10.0
     publish_zero_velocity: true
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    # Brief Wi-Fi/TF scheduling gaps must stop motion safely without
+    # immediately launching a physical recovery. The Pi command deadman still
+    # fails closed while the controller waits for fresh transforms.
+    failure_tolerance: 1.5
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
     controller_plugins: ["FollowPath"]
@@ -165,7 +172,12 @@ controller_server:
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: false
       closed_loop: true
-      debug_trajectory_details: True
+      debug_trajectory_details: False
+      # Let the local planner choose a collision-checked reverse trajectory
+      # during an ordinary mission when backing into open space is safer than
+      # turning near a wall. The DWB Oscillation critic prevents rapid sign
+      # flipping, and the Pi independently rejects reverse whenever its rear
+      # lidar sector is unsafe.
       min_vel_x: -0.35
       min_vel_y: 0.0
       max_vel_x: 0.70
@@ -182,10 +194,13 @@ controller_server:
       decel_lim_x: -0.50
       decel_lim_y: 0.0
       decel_lim_theta: -1.20
-      vx_samples: 16
+      # Footprint-aware scoring is more expensive than center-cell scoring.
+      # These samples preserve useful differential-drive choices while keeping
+      # the 20 Hz command stream inside the Pi deadman margin.
+      vx_samples: 12
       vy_samples: 5
-      vtheta_samples: 40
-      sim_time: 1.7
+      vtheta_samples: 24
+      sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
@@ -193,10 +208,14 @@ controller_server:
       trans_stopped_velocity: 0.06
       short_circuit_trajectory_evaluation: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      # The long footprint needs obstacle clearance to compete with path
-      # alignment; the previous weight allowed trajectories to hug inflated cost.
-      BaseObstacle.scale: 0.08
+      critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      # BaseObstacle only checks the center cell and is valid only for circular
+      # robots. ObstacleFootprint rejects any trajectory that collides with the
+      # long trolley body. Use the worst footprint cost instead of summing every
+      # sample along the trajectory: summing strongly penalized longer/faster
+      # valid trajectories and made the robot crawl or stop in open routes.
+      ObstacleFootprint.scale: 0.50
+      ObstacleFootprint.sum_scores: false
       PathAlign.scale: 4.0
       PathAlign.forward_point_distance: 0.05
       GoalAlign.scale: 3.0
@@ -227,6 +246,9 @@ local_costmap:
       filters: ["keepout_filter"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        # Keep local trajectory scoring responsive. Collision rejection still
+        # uses the complete padded footprint, while the independent Pi safety
+        # gate remains the final hard-stop layer.
         cost_scaling_factor: 2.5
         inflation_radius: 0.75
       voxel_layer:
@@ -297,8 +319,12 @@ global_costmap:
         filter_info_topic: "/costmap_filter_info"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.75
+        # The global field stays wider than the local scoring field so NavFn
+        # prefers routes that do not lead the long trolley into the Pi's front
+        # safety envelope. Unlike the former local setting, this does not sum a
+        # large cost at every DWB trajectory sample.
+        cost_scaling_factor: 1.8
+        inflation_radius: 1.10
       always_send_full_costmap: True
 
 map_server:

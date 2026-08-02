@@ -154,8 +154,12 @@ def test_remote_navigation_stream_has_wifi_jitter_margin():
         ).group(1)
     )
 
-    assert controller_frequency >= 20.0
+    # Trajectory scoring may run more slowly than the remote command stream.
+    # velocity_smoother republishes the accepted command at 20 Hz while the Pi
+    # independently applies fresh lidar constraints and its navigation deadman.
+    assert controller_frequency >= 10.0
     assert smoothing_frequency >= 20.0
+    assert smoothing_frequency >= controller_frequency
     assert velocity_timeout >= 0.5
     assert nav_timeout >= 0.5
     assert "nav_timeout_sec = LaunchConfiguration('nav_timeout_sec')" in safety_launch
@@ -212,6 +216,49 @@ def test_navigation_turns_are_bounded_and_use_the_rotation_shim():
     assert re.search(r'rotate_to_heading_angular_vel:\s*0\.55\b', nav2)
     assert max_vel_theta == 0.80
     assert smoother_theta == max_vel_theta
+
+
+def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
+    nav2 = read('config/nav2_params.yaml')
+    inflation_radii = [
+        float(value)
+        for value in re.findall(r'inflation_radius:\s*([0-9.]+)', nav2)
+    ]
+
+    assert '"ObstacleFootprint"' in nav2
+    assert '"BaseObstacle"' not in nav2
+    assert re.search(r'ObstacleFootprint\.scale:\s*0\.50\b', nav2)
+    assert re.search(r'ObstacleFootprint\.sum_scores:\s*false\b', nav2)
+    assert inflation_radii == [0.75, 1.10]
+    assert re.search(r'vx_samples:\s*12\b', nav2)
+    assert re.search(r'vtheta_samples:\s*24\b', nav2)
+
+
+def test_normal_navigation_can_reverse_safely_and_replans_stably():
+    nav2 = read('config/nav2_params.yaml')
+    nav2_launch = read('launch/nav2.launch.py')
+    cmake = read('CMakeLists.txt')
+    behavior_tree = read(
+        'behavior_trees/navigate_to_pose_stable_replanning.xml'
+    )
+
+    assert re.search(r'controller_frequency:\s*10\.0\b', nav2)
+    assert re.search(r'min_vel_x:\s*-0\.35\b', nav2)
+    assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
+    assert re.search(r'min_velocity:\s*\[-0\.35,\s*0\.0,\s*-0\.80\]', nav2)
+    assert '<RateController hz="0.5">' in behavior_tree
+    backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
+    spin = '<Spin spin_dist="1.57"/>'
+    assert backup in behavior_tree
+    assert behavior_tree.index(backup) < behavior_tree.index(spin)
+    assert re.search(r'failure_tolerance:\s*1\.5\b', nav2)
+    assert "remappings=nav2_remappings + [('cmd_vel', 'cmd_vel_nav')]" in nav2_launch
+    assert (
+        'default_nav_to_pose_bt_xml: '
+        '"NAVIGATE_TO_POSE_BT_XML_IS_SET_BY_LAUNCH"' in nav2
+    )
+    assert "'default_nav_to_pose_bt_xml': navigate_to_pose_bt_file" in nav2_launch
+    assert 'DIRECTORY behavior_trees config description' in cmake
 
 
 def test_amcl_cannot_randomly_relocate_during_navigation():

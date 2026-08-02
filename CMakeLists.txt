@@ -42,7 +42,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY config description docs launch maps systemd wifi_provisioning_ui worlds
+  DIRECTORY behavior_trees config description docs launch maps systemd wifi_provisioning_ui worlds
   DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
 )
