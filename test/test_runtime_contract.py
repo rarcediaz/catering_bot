@@ -229,7 +229,16 @@ def test_navigation_finishes_by_position_without_a_final_heading_spin():
     assert re.search(r'xy_goal_tolerance:\s*0\.35\b', nav2)
 
 
-def test_navigation_is_direction_neutral_and_turns_are_bounded():
+def test_rotation_counts_as_navigation_progress():
+    nav2 = read('config/nav2_params.yaml')
+
+    assert 'plugin: "nav2_controller::PoseProgressChecker"' in nav2
+    assert re.search(r'required_movement_radius:\s*0\.05\b', nav2)
+    assert re.search(r'required_movement_angle:\s*0\.15\b', nav2)
+    assert re.search(r'movement_time_allowance:\s*30\.0\b', nav2)
+
+
+def test_navigation_prefers_front_lidar_direction_and_turns_are_bounded():
     nav2 = read('config/nav2_params.yaml')
     max_vel_theta = float(
         re.search(r'max_vel_theta:\s*([0-9.]+)', nav2).group(1)
@@ -243,12 +252,30 @@ def test_navigation_is_direction_neutral_and_turns_are_bounded():
 
     assert 'plugin: "dwb_core::DWBLocalPlanner"' in nav2
     assert 'RotationShimController' not in nav2
-    assert '"PathAlign"' not in nav2
+    assert '"PathAlign"' in nav2
     assert '"GoalAlign"' not in nav2
+    assert '"PreferForward"' in nav2
+    assert re.search(r'PreferForward\.scale:\s*2\.0\b', nav2)
+    assert re.search(r'PreferForward\.penalty:\s*1\.0\b', nav2)
+    assert re.search(r'PreferForward\.theta_scale:\s*0\.05\b', nav2)
+    assert re.search(r'PathAlign\.scale:\s*8\.0\b', nav2)
+    assert re.search(r'PathAlign\.forward_point_distance:\s*0\.25\b', nav2)
+    assert re.search(r'min_speed_theta:\s*0\.10\b', nav2)
+    assert re.search(r'Oscillation\.oscillation_reset_dist:\s*0\.05\b', nav2)
+    assert re.search(r'Oscillation\.oscillation_reset_angle:\s*0\.20\b', nav2)
+    assert re.search(r'Oscillation\.oscillation_reset_time:\s*-1\.0\b', nav2)
+    assert re.search(r'Oscillation\.x_only_threshold:\s*0\.05\b', nav2)
     assert re.search(r'vx_samples:\s*13\b', nav2)
     assert re.search(r'vtheta_samples:\s*21\b', nav2)
-    assert max_vel_theta == 0.80
+    assert max_vel_theta == 1.00
     assert smoother_theta == max_vel_theta
+    assert re.search(r'acc_lim_theta:\s*1\.50\b', nav2)
+    assert re.search(r'decel_lim_theta:\s*-1\.80\b', nav2)
+    assert re.search(r'max_accel:\s*\[0\.35,\s*0\.0,\s*1\.50\]', nav2)
+    assert re.search(r'max_decel:\s*\[-2\.00,\s*0\.0,\s*-1\.80\]', nav2)
+    assert re.search(r'max_rotational_vel:\s*0\.70\b', nav2)
+    assert re.search(r'min_rotational_vel:\s*0\.10\b', nav2)
+    assert re.search(r'rotational_acc_lim:\s*0\.70\b', nav2)
 
 
 def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
@@ -277,13 +304,34 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
 
     assert '"ObstacleFootprint"' in nav2
     assert '"BaseObstacle"' not in nav2
-    assert re.search(r'ObstacleFootprint\.scale:\s*0\.50\b', nav2)
+    assert re.search(r'ObstacleFootprint\.scale:\s*0\.70\b', nav2)
     assert re.search(r'ObstacleFootprint\.sum_scores:\s*false\b', nav2)
-    assert inflation_radii == [0.60, 0.60]
-    assert inflation_scales == [4.0, 4.0]
+    # Each costmap has ordinary obstacle inflation plus a second inflation
+    # stage that runs after the keepout filter.
+    assert inflation_radii == [0.60, 0.60, 0.60, 0.60]
+    assert inflation_scales == [4.0, 4.0, 4.0, 4.0]
+    assert nav2.count(
+        'filters: ["keepout_filter", "keepout_inflation_layer"]'
+    ) == 2
+    assert nav2.count(
+        'keepout_inflation_layer:\n'
+        '        plugin: "nav2_costmap_2d::InflationLayer"'
+    ) == 2
     assert abs(inflation_radii[0] - (side_start + side_clearance)) <= 0.01
     assert re.search(r'vx_samples:\s*13\b', nav2)
     assert re.search(r'vtheta_samples:\s*21\b', nav2)
+
+
+def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
+    nav2 = read('config/nav2_params.yaml')
+
+    # Local control only bridges a missed scan so stale returns cannot trap
+    # DWB. The global planner retains the longer memory needed to route around
+    # intermittent chair-leg returns. This does not widen inflation.
+    assert nav2.count('observation_persistence: 0.20') == 1
+    assert nav2.count('observation_persistence: 0.75') == 1
+    assert nav2.count('inflation_radius: 0.60') == 4
+    assert nav2.count('cost_scaling_factor: 4.0') == 4
 
 
 def test_normal_navigation_can_reverse_safely_and_replans_stably():
@@ -296,13 +344,16 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
 
     assert re.search(r'controller_frequency:\s*10\.0\b', nav2)
     assert re.search(r'min_vel_x:\s*-0\.70\b', nav2)
+    assert re.search(r'transform_tolerance:\s*0\.70\b', nav2)
     assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
-    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-0\.80\]', nav2)
-    assert '<RateController hz="0.5">' in behavior_tree
+    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-1\.00\]', nav2)
+    assert '<RateController hz="0.2">' in behavior_tree
     backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
     spin = '<Spin spin_dist="1.57"/>'
+    assert '<Sequence name="BackUpThenSpin">' in behavior_tree
     assert backup in behavior_tree
     assert behavior_tree.index(backup) < behavior_tree.index(spin)
+    assert re.search(r'default_server_timeout:\s*200\b', nav2)
     assert re.search(r'failure_tolerance:\s*1\.5\b', nav2)
     assert "remappings=nav2_remappings + [('cmd_vel', 'cmd_vel_nav')]" in nav2_launch
     assert (
@@ -311,6 +362,39 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     )
     assert "'default_nav_to_pose_bt_xml': navigate_to_pose_bt_file" in nav2_launch
     assert 'DIRECTORY behavior_trees config description' in cmake
+
+
+def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
+    safety = read('scripts/safety_node.py')
+    contract = read('docs/PI_CENTRAL_CONTRACT.md')
+
+    # Physical odometry, rather than a still-high raw request, determines the
+    # emergency stopping distance. Clearance independently caps safe speed.
+    get_speed = safety[safety.index('def get_forward_speed_mps'):]
+    get_speed = get_speed[:get_speed.index('def get_dynamic_stop_distance')]
+    assert 'self.forward_speed_mps' in get_speed
+    assert 'latest_nav_cmd' not in get_speed
+    assert 'def get_clearance_speed_scale' in safety
+    assert 'def get_side_turn_scale' in safety
+    assert "declare_parameter('side_hard_stop_distance_m', 0.03)" in safety
+    assert "declare_parameter('side_min_speed_scale', 0.25)" in safety
+    assert "return 'left_turn_slowdown'" in safety
+    assert "return 'right_turn_slowdown'" in safety
+    assert 'closest_forward_clearance' in safety
+    assert 'closest_rear_clearance' in safety
+
+    for topic in (
+        '/robot_health/left_obstacle_active',
+        '/robot_health/right_obstacle_active',
+        '/robot_health/rear_obstacle_active',
+        '/robot_health/navigation_safety_limited',
+        '/robot_health/navigation_safety_reason',
+    ):
+        assert topic in safety
+        assert topic in contract
+
+    assert 'self.get_logger().warning(text)' in safety
+    assert 'Navigation safety constraint active:' in safety
 
 
 def test_amcl_cannot_randomly_relocate_during_navigation():

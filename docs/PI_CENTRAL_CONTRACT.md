@@ -59,7 +59,16 @@ for motor-power isolation.
 | `/tf` | `tf2_msgs/msg/TFMessage` | diff-drive controller and robot-state publisher |
 | `/tf_static` | `tf2_msgs/msg/TFMessage` | robot-state publisher |
 | `/robot_health/front_obstacle_active` | `std_msgs/msg/Bool` | obstacle safety node |
+| `/robot_health/left_obstacle_active` | `std_msgs/msg/Bool` | left-turn slowdown envelope active |
+| `/robot_health/right_obstacle_active` | `std_msgs/msg/Bool` | right-turn slowdown envelope active |
+| `/robot_health/rear_obstacle_active` | `std_msgs/msg/Bool` | reverse-motion safety constraint |
+| `/robot_health/closest_left_range_m` | `std_msgs/msg/Float32` | left-side clearance beyond the body envelope |
+| `/robot_health/closest_right_range_m` | `std_msgs/msg/Float32` | right-side clearance beyond the body envelope |
+| `/robot_health/closest_rear_range_m` | `std_msgs/msg/Float32` | rear clearance beyond the body envelope |
 | `/robot_health/front_speed_limit_scale` | `std_msgs/msg/Float32` | obstacle safety node |
+| `/robot_health/rear_speed_limit_scale` | `std_msgs/msg/Float32` | reverse clearance speed scale |
+| `/robot_health/navigation_safety_limited` | `std_msgs/msg/Bool` | whether Pi safety is changing the active Nav2 command |
+| `/robot_health/navigation_safety_reason` | `std_msgs/msg/String` | active reason such as `front_stop`, `left_turn_slowdown`, or `right_turn_stop` |
 | `/robot_health/startup_gate_open` | `std_msgs/msg/Bool` | automatic startup safety gate state |
 | `/robot_health/log` | `std_msgs/msg/String` | safety and health nodes |
 
@@ -78,10 +87,26 @@ health have all been observed and the automatic startup safety gate is open.
 It is reporting only; a brief DDS discovery delay does not restart the
 hardware service.
 
+Side clearance is progressive: inside the 0.25 m body-edge envelope, the Pi
+scales only the angular component that turns toward the obstacle. It preserves
+a small 0.03 m hard-stop boundary for an imminent side-sweep collision. Turns
+away from the obstacle are not reduced, and the front/rear collision stops
+remain fail-closed.
+
+Front and rear clearance limits preserve Nav2's collision-checked curvature:
+when a translating arc must slow, the Pi applies the same scale to its linear
+and angular components. A hard front/rear stop therefore stops the entire arc
+instead of unexpectedly converting it into an in-place body sweep. Pure turns
+remain available subject to the independent left/right clearance envelopes.
+
 Mission Control may display the age of the most recently received
 `/robot_health/ready` sample as **signal age**. This is a freshness indicator,
 not a network round-trip-time measurement and does not require a Pi command or
 ping topic.
+
+Obstacle and navigation-constraint transitions are also written to the Pi
+systemd journal. This preserves the reason and raw-versus-safe velocity values
+after a mission finishes even when no ROS logger was attached at the time.
 
 ## Command ownership and timeouts
 
@@ -94,7 +119,7 @@ zero-velocity override. `twist_mux` is the only publisher to
 |---|---:|---|
 | startup motion gate | 5.0 s quiet period | motion stays zero until scans are fresh and no nonzero raw command is active |
 | filtered scan freshness | 0.50 s | safety node continuously commands zero |
-| raw navigation update | 0.25 s | safe navigation output becomes zero |
+| raw navigation update | 0.50 s | safe navigation output becomes zero |
 | raw manual update | 0.25 s | safe manual output becomes zero |
 | mux safety/manual/nav inputs | 0.15/0.20/0.20 s | stale channel is dropped |
 | diff-drive command | 0.25 s | controller commands zero wheel speed |

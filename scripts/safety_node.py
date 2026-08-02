@@ -24,6 +24,8 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('rear_stop_start_x_m', 0.91)
         self.declare_parameter('front_stop_width_m', 0.8596)
         self.declare_parameter('side_stop_distance_m', 0.25)
+        self.declare_parameter('side_hard_stop_distance_m', 0.03)
+        self.declare_parameter('side_min_speed_scale', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.25)
         # Navigation crosses Wi-Fi/DDS. Keep enough jitter margin to bridge a
@@ -49,6 +51,17 @@ class ObstacleSafetyNode(Node):
         self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
         self.front_stop_half_width_m = 0.5 * self.front_stop_width_m
         self.side_stop_distance_m = float(self.get_parameter('side_stop_distance_m').value)
+        self.side_hard_stop_distance_m = max(
+            0.0,
+            min(
+                float(self.get_parameter('side_hard_stop_distance_m').value),
+                self.side_stop_distance_m,
+            ),
+        )
+        self.side_min_speed_scale = max(
+            0.0,
+            min(float(self.get_parameter('side_min_speed_scale').value), 1.0),
+        )
         self.side_stop_start_y_m = float(self.get_parameter('side_stop_start_y_m').value)
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
@@ -70,6 +83,10 @@ class ObstacleSafetyNode(Node):
         self.dynamic_stop_distance_m = self.obstacle_stop_distance_m
         self.forward_speed_mps = 0.0
         self.speed_limit_scale = 1.0
+        self.rear_speed_limit_scale = 1.0
+        self.left_turn_scale = 1.0
+        self.right_turn_scale = 1.0
+        self.nav_constraint_reason = ''
         self.latest_joy_cmd = Twist()
         self.latest_nav_cmd = Twist()
         self.latest_joy_time = None
@@ -102,9 +119,54 @@ class ObstacleSafetyNode(Node):
             '/robot_health/front_obstacle_active',
             10
         )
+        self.left_obstacle_pub = self.create_publisher(
+            Bool,
+            '/robot_health/left_obstacle_active',
+            10
+        )
+        self.right_obstacle_pub = self.create_publisher(
+            Bool,
+            '/robot_health/right_obstacle_active',
+            10
+        )
+        self.rear_obstacle_pub = self.create_publisher(
+            Bool,
+            '/robot_health/rear_obstacle_active',
+            10
+        )
+        self.left_range_pub = self.create_publisher(
+            Float32,
+            '/robot_health/closest_left_range_m',
+            10
+        )
+        self.right_range_pub = self.create_publisher(
+            Float32,
+            '/robot_health/closest_right_range_m',
+            10
+        )
+        self.rear_range_pub = self.create_publisher(
+            Float32,
+            '/robot_health/closest_rear_range_m',
+            10
+        )
         self.speed_limit_scale_pub = self.create_publisher(
             Float32,
             '/robot_health/front_speed_limit_scale',
+            10
+        )
+        self.rear_speed_limit_scale_pub = self.create_publisher(
+            Float32,
+            '/robot_health/rear_speed_limit_scale',
+            10
+        )
+        self.nav_safety_limited_pub = self.create_publisher(
+            Bool,
+            '/robot_health/navigation_safety_limited',
+            10
+        )
+        self.nav_safety_reason_pub = self.create_publisher(
+            String,
+            '/robot_health/navigation_safety_reason',
             10
         )
         self.startup_gate_pub = self.create_publisher(
@@ -144,6 +206,13 @@ class ObstacleSafetyNode(Node):
         msg = String()
         msg.data = ('!!! ' if is_crit else '> ') + text
         self.log_pub.publish(msg)
+        # Keep the same transition in the Pi service journal. The ROS health
+        # topic is intentionally volatile, while journalctl is what operators
+        # have available after a mission has already finished.
+        if is_crit:
+            self.get_logger().warning(text)
+        else:
+            self.get_logger().info(text)
 
     def copy_twist(self, cmd):
         copied = Twist()
@@ -249,9 +318,13 @@ class ObstacleSafetyNode(Node):
         self.forward_speed_mps = msg.twist.twist.linear.x
 
     def get_forward_speed_mps(self):
-        active_cmd = self.get_active_command()
-        cmd_speed = abs(active_cmd.linear.x) if active_cmd is not None else 0.0
-        return max(0.0, abs(self.forward_speed_mps), cmd_speed)
+        # Stopping distance is a property of physical momentum, not of the raw
+        # command Nav2 is still requesting. Including the raw command here can
+        # latch a high-speed stop forever: the Pi outputs zero, odometry falls
+        # to zero, but Nav2 keeps requesting the same speed so the stop distance
+        # never shrinks enough to permit a controlled creep away from the
+        # boundary.
+        return max(0.0, abs(self.forward_speed_mps))
 
     def get_dynamic_stop_distance(self):
         forward_speed = self.get_forward_speed_mps()
@@ -266,35 +339,149 @@ class ObstacleSafetyNode(Node):
         )
         return stop_distance, forward_speed
 
+    def get_clearance_speed_scale(self, clearance, command_speed):
+        """Return a safe scale that converges instead of stop/start latching."""
+        command_speed = abs(command_speed)
+        if command_speed <= self.command_epsilon or not math.isfinite(clearance):
+            return 1.0
+
+        minimum_clearance = self.obstacle_stop_distance_m
+        slowdown_clearance = (
+            max(minimum_clearance, self.obstacle_stop_distance_max_m)
+            + max(0.0, self.obstacle_slowdown_margin_m)
+        )
+        if clearance <= minimum_clearance:
+            return 0.0
+        if clearance >= slowdown_clearance:
+            return 1.0
+
+        clearance_span = max(slowdown_clearance - minimum_clearance, 1e-3)
+        allowed_speed = self.obstacle_stop_speed_mps * (
+            (clearance - minimum_clearance) / clearance_span
+        )
+        return max(0.0, min(1.0, allowed_speed / command_speed))
+
+    def get_side_turn_scale(self, clearance):
+        """Scale a turn toward a close side obstacle without stop/start chatter."""
+        if not math.isfinite(clearance) or clearance >= self.side_stop_distance_m:
+            return 1.0
+        if clearance <= self.side_hard_stop_distance_m:
+            return 0.0
+
+        clearance_span = max(
+            self.side_stop_distance_m - self.side_hard_stop_distance_m,
+            1e-3,
+        )
+        progress = (
+            (clearance - self.side_hard_stop_distance_m) / clearance_span
+        )
+        return self.side_min_speed_scale + (
+            (1.0 - self.side_min_speed_scale) * progress
+        )
+
     def has_active_motion_constraints(self):
         return (
             self.front_obstacle_active or
             self.left_obstacle_active or
             self.right_obstacle_active or
             self.rear_obstacle_active or
-            self.speed_limit_scale < 1.0
+            self.speed_limit_scale < 1.0 or
+            self.rear_speed_limit_scale < 1.0
         )
 
     def apply_motion_constraints(self, cmd):
         if not self.startup_gate_open or not self.is_scan_healthy():
             return Twist()
         limited = self.copy_twist(cmd)
+        translation_scale = 1.0
 
         if self.front_obstacle_active and limited.linear.x > 0.0:
-            limited.linear.x = 0.0
-        elif self.speed_limit_scale < 1.0 and limited.linear.x > 0.0:
-            limited.linear.x *= self.speed_limit_scale
+            translation_scale = 0.0
+        elif limited.linear.x > 0.0:
+            translation_scale = self.get_clearance_speed_scale(
+                self.closest_forward_clearance,
+                limited.linear.x,
+            )
 
         if self.rear_obstacle_active and limited.linear.x < 0.0:
-            limited.linear.x = 0.0
+            translation_scale = 0.0
+        elif limited.linear.x < 0.0:
+            translation_scale = self.get_clearance_speed_scale(
+                self.closest_rear_clearance,
+                limited.linear.x,
+            )
 
-        if self.left_obstacle_active and limited.angular.z > 0.0:
-            limited.angular.z = 0.0
+        # DWB collision-checks a complete linear/angular trajectory. Scaling
+        # only its translation turns a safe arc into a different, unchecked
+        # rotation about the axle, which can sweep the long trolley footprint
+        # into an obstacle or keepout boundary. Preserve the selected curvature
+        # whenever front/rear clearance limits a translating command. Pure
+        # rotation commands remain governed by the independent side envelopes.
+        limited.linear.x *= translation_scale
+        if abs(cmd.linear.x) > self.command_epsilon:
+            limited.angular.z *= translation_scale
 
-        if self.right_obstacle_active and limited.angular.z < 0.0:
-            limited.angular.z = 0.0
+        if limited.angular.z > 0.0:
+            limited.angular.z *= self.left_turn_scale
+
+        if limited.angular.z < 0.0:
+            limited.angular.z *= self.right_turn_scale
 
         return limited
+
+    def get_nav_constraint_reason(self, raw_cmd, safe_cmd):
+        if not self.startup_gate_open:
+            return 'startup_gate'
+        if not self.is_scan_healthy():
+            return 'scan_stale'
+        if raw_cmd.linear.x > self.command_epsilon:
+            if self.front_obstacle_active:
+                return 'front_stop'
+            if safe_cmd.linear.x < raw_cmd.linear.x - self.command_epsilon:
+                return 'front_slowdown'
+        elif raw_cmd.linear.x < -self.command_epsilon:
+            if self.rear_obstacle_active:
+                return 'rear_stop'
+            if safe_cmd.linear.x > raw_cmd.linear.x + self.command_epsilon:
+                return 'rear_slowdown'
+        if (
+            raw_cmd.angular.z > self.command_epsilon and
+            safe_cmd.angular.z < raw_cmd.angular.z - self.command_epsilon
+        ):
+            if abs(safe_cmd.angular.z) <= self.command_epsilon:
+                return 'left_turn_stop'
+            return 'left_turn_slowdown'
+        if (
+            raw_cmd.angular.z < -self.command_epsilon and
+            safe_cmd.angular.z > raw_cmd.angular.z + self.command_epsilon
+        ):
+            if abs(safe_cmd.angular.z) <= self.command_epsilon:
+                return 'right_turn_stop'
+            return 'right_turn_slowdown'
+        return ''
+
+    def publish_nav_constraint_state(self, nav_active, safe_cmd):
+        reason = ''
+        if nav_active and self.is_twist_nonzero(self.latest_nav_cmd):
+            reason = self.get_nav_constraint_reason(self.latest_nav_cmd, safe_cmd)
+
+        self.nav_safety_limited_pub.publish(Bool(data=bool(reason)))
+        self.nav_safety_reason_pub.publish(String(data=reason))
+        if reason == self.nav_constraint_reason:
+            return
+
+        if reason:
+            self.send_log(
+                'Navigation safety constraint active: '
+                f'{reason} (raw linear={self.latest_nav_cmd.linear.x:.2f}, '
+                f'angular={self.latest_nav_cmd.angular.z:.2f}; '
+                f'safe linear={safe_cmd.linear.x:.2f}, '
+                f'angular={safe_cmd.angular.z:.2f}).',
+                is_crit=True,
+            )
+        elif self.nav_constraint_reason:
+            self.send_log('Navigation safety constraint cleared.')
+        self.nav_constraint_reason = reason
 
     def publish_safety_hold(self):
         now = time.monotonic()
@@ -344,6 +531,8 @@ class ObstacleSafetyNode(Node):
             self.safety_cmd_pub.publish(Twist())
             self.joy_was_active = False
             self.speed_limit_scale_pub.publish(Float32(data=0.0))
+            self.rear_speed_limit_scale_pub.publish(Float32(data=0.0))
+            self.publish_nav_constraint_state(self.is_nav_active(), Twist())
             return
 
         joy_active = self.is_joy_active()
@@ -356,15 +545,16 @@ class ObstacleSafetyNode(Node):
                 is_crit=True,
             )
 
+        safe_nav_cmd = Twist()
         if nav_active:
             # Re-publish at the Pi-local 20 Hz safety rate. During a brief DDS
             # gap this keeps the downstream mux/controller fed while every
             # command is still constrained by the latest local lidar scan.
-            self.nav_gate_pub.publish(
-                self.apply_motion_constraints(self.latest_nav_cmd)
-            )
+            safe_nav_cmd = self.apply_motion_constraints(self.latest_nav_cmd)
+            self.nav_gate_pub.publish(safe_nav_cmd)
         else:
             self.nav_gate_pub.publish(Twist())
+        self.publish_nav_constraint_state(nav_active, safe_nav_cmd)
         if joy_active:
             self.joy_gate_pub.publish(
                 self.apply_motion_constraints(self.latest_joy_cmd)
@@ -385,12 +575,18 @@ class ObstacleSafetyNode(Node):
             if self.has_active_motion_constraints():
                 self.safety_cmd_pub.publish(Twist())
             self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+            self.rear_speed_limit_scale_pub.publish(
+                Float32(data=float(self.rear_speed_limit_scale))
+            )
             return
 
         if self.has_active_motion_constraints():
             self.safety_cmd_pub.publish(self.apply_motion_constraints(active_cmd))
 
         self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
+        self.rear_speed_limit_scale_pub.publish(
+            Float32(data=float(self.rear_speed_limit_scale))
+        )
 
     def scan_callback(self, msg):
         if not self.obstacle_stop_enabled:
@@ -436,23 +632,10 @@ class ObstacleSafetyNode(Node):
                     closest_right_clearance = min(closest_right_clearance, right_clearance)
 
         dynamic_stop_distance, forward_speed = self.get_dynamic_stop_distance()
-        slowdown_distance = dynamic_stop_distance + max(0.0, self.obstacle_slowdown_margin_m)
         front_obstacle_detected = closest_forward_clearance <= dynamic_stop_distance
         left_obstacle_detected = closest_left_clearance <= self.side_stop_distance_m
         right_obstacle_detected = closest_right_clearance <= self.side_stop_distance_m
         rear_obstacle_detected = closest_rear_clearance <= dynamic_stop_distance
-
-        if (
-            math.isfinite(closest_forward_clearance)
-            and closest_forward_clearance < slowdown_distance
-        ):
-            margin = max(self.obstacle_slowdown_margin_m, 1e-3)
-            speed_limit_scale = max(
-                0.0,
-                min(1.0, (closest_forward_clearance - dynamic_stop_distance) / margin)
-            )
-        else:
-            speed_limit_scale = 1.0
 
         previous_front = self.front_obstacle_active
         previous_left = self.left_obstacle_active
@@ -464,11 +647,32 @@ class ObstacleSafetyNode(Node):
         self.closest_right_clearance = closest_right_clearance
         self.closest_rear_clearance = closest_rear_clearance
         self.dynamic_stop_distance_m = dynamic_stop_distance
-        self.speed_limit_scale = 0.0 if front_obstacle_detected else speed_limit_scale
         self.front_obstacle_active = front_obstacle_detected
         self.left_obstacle_active = left_obstacle_detected
         self.right_obstacle_active = right_obstacle_detected
         self.rear_obstacle_active = rear_obstacle_detected
+        self.left_turn_scale = self.get_side_turn_scale(closest_left_clearance)
+        self.right_turn_scale = self.get_side_turn_scale(closest_right_clearance)
+
+        active_cmd = self.get_active_command()
+        if active_cmd is not None and active_cmd.linear.x > self.command_epsilon:
+            self.speed_limit_scale = (
+                0.0 if front_obstacle_detected else self.get_clearance_speed_scale(
+                    closest_forward_clearance,
+                    active_cmd.linear.x,
+                )
+            )
+        else:
+            self.speed_limit_scale = 1.0
+        if active_cmd is not None and active_cmd.linear.x < -self.command_epsilon:
+            self.rear_speed_limit_scale = (
+                0.0 if rear_obstacle_detected else self.get_clearance_speed_scale(
+                    closest_rear_clearance,
+                    active_cmd.linear.x,
+                )
+            )
+        else:
+            self.rear_speed_limit_scale = 1.0
 
         reported_range = (
             closest_forward_clearance
@@ -479,6 +683,18 @@ class ObstacleSafetyNode(Node):
         self.front_stop_distance_pub.publish(Float32(data=float(dynamic_stop_distance)))
         self.forward_speed_pub.publish(Float32(data=float(forward_speed)))
         self.front_obstacle_pub.publish(Bool(data=front_obstacle_detected))
+        self.left_obstacle_pub.publish(Bool(data=left_obstacle_detected))
+        self.right_obstacle_pub.publish(Bool(data=right_obstacle_detected))
+        self.rear_obstacle_pub.publish(Bool(data=rear_obstacle_detected))
+        self.left_range_pub.publish(Float32(data=float(
+            closest_left_clearance if math.isfinite(closest_left_clearance) else -1.0
+        )))
+        self.right_range_pub.publish(Float32(data=float(
+            closest_right_clearance if math.isfinite(closest_right_clearance) else -1.0
+        )))
+        self.rear_range_pub.publish(Float32(data=float(
+            closest_rear_clearance if math.isfinite(closest_rear_clearance) else -1.0
+        )))
 
         if self.is_nav_active():
             self.nav_gate_pub.publish(self.apply_motion_constraints(self.latest_nav_cmd))
@@ -496,15 +712,17 @@ class ObstacleSafetyNode(Node):
         self.log_obstacle_transition(
             left_obstacle_detected,
             previous_left,
-            f'Left turn blocked ({closest_left_clearance:.2f}m <= '
-            f'{self.side_stop_distance_m:.2f}m).',
+            f'Left turn slowdown active ({closest_left_clearance:.2f}m <= '
+            f'{self.side_stop_distance_m:.2f}m; hard stop at '
+            f'{self.side_hard_stop_distance_m:.2f}m).',
             'Left side clear.'
         )
         self.log_obstacle_transition(
             right_obstacle_detected,
             previous_right,
-            f'Right turn blocked ({closest_right_clearance:.2f}m <= '
-            f'{self.side_stop_distance_m:.2f}m).',
+            f'Right turn slowdown active ({closest_right_clearance:.2f}m <= '
+            f'{self.side_stop_distance_m:.2f}m; hard stop at '
+            f'{self.side_hard_stop_distance_m:.2f}m).',
             'Right side clear.'
         )
         self.log_obstacle_transition(

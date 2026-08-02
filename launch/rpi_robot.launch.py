@@ -69,6 +69,8 @@ def generate_launch_description():
     rear_stop_start_x_m = LaunchConfiguration('rear_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
+    side_hard_stop_distance_m = LaunchConfiguration('side_hard_stop_distance_m')
+    side_min_speed_scale = LaunchConfiguration('side_min_speed_scale')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     nav_timeout_sec = LaunchConfiguration('nav_timeout_sec')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
@@ -95,6 +97,8 @@ def generate_launch_description():
             'rear_stop_start_x_m': rear_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
             'side_stop_distance_m': side_stop_distance_m,
+            'side_hard_stop_distance_m': side_hard_stop_distance_m,
+            'side_min_speed_scale': side_min_speed_scale,
             'side_stop_start_y_m': side_stop_start_y_m,
             'nav_timeout_sec': nav_timeout_sec,
             'nav_stop_hold_sec': nav_stop_hold_sec,
@@ -158,8 +162,24 @@ def generate_launch_description():
             'side_stop_distance_m',
             default_value='0.25',
             description=(
-                'Block left/right turns when an obstacle is within this side '
-                'distance in meters.'
+                'Begin progressively slowing turns toward an obstacle within '
+                'this side clearance in meters.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'side_hard_stop_distance_m',
+            default_value='0.03',
+            description=(
+                'Stop a turn toward an obstacle only inside this imminent '
+                'side-collision clearance in meters.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'side_min_speed_scale',
+            default_value='0.25',
+            description=(
+                'Minimum progressive turn scale immediately outside the side '
+                'hard-stop boundary.'
             )
         ),
         DeclareLaunchArgument(
