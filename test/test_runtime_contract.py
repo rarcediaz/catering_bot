@@ -180,23 +180,56 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
     hardware_max = float(
         re.search(r'linear\.x\.max_velocity:\s*([0-9.]+)', controllers).group(1)
     )
+    smoother_min = float(
+        re.search(r'min_velocity:\s*\[(-[0-9.]+),', nav2).group(1)
+    )
+    hardware_min = float(
+        re.search(r'linear\.x\.min_velocity:\s*(-[0-9.]+)', controllers).group(1)
+    )
 
     assert max_vel_x == 0.70
     assert max_speed_xy == 0.70
     assert smoother_max == 0.70
     assert hardware_max >= smoother_max
+    assert smoother_min == -0.70
+    assert hardware_min <= smoother_min
     assert 'feedback: "OPEN_LOOP"' in nav2
+
+
+def test_base_link_is_drive_axle_midpoint_and_geometry_is_consistent():
+    core = read('description/robot_core.xacro')
+    controllers = read('config/my_controllers.yaml')
+    nav2 = read('config/nav2_params.yaml')
+
+    modeled_separation = float(
+        re.search(r'name="wheel_separation" value="([0-9.]+)"', core).group(1)
+    )
+    controlled_separation = float(
+        re.search(r'wheel_separation:\s*([0-9.]+)', controllers).group(1)
+    )
+
+    assert modeled_separation == 0.44
+    assert controlled_separation == modeled_separation
+    assert 'xyz="0 ${wheel_separation / 2} -0.0538"' in core
+    assert 'xyz="0 -${wheel_separation / 2} -0.0538"' in core
+    assert '<origin xyz="-0.15 0 0"/>' in core
+    axle_centered_footprint = (
+        'footprint: "[[-0.15, -0.305], [0.917, -0.305], '
+        '[0.917, 0.305], [-0.15, 0.305]]"'
+    )
+    assert nav2.count(axle_centered_footprint) == 2
 
 
 def test_navigation_finishes_by_position_without_a_final_heading_spin():
     nav2 = read('config/nav2_params.yaml')
 
     assert 'plugin: "nav2_controller::PositionGoalChecker"' in nav2
-    assert 'rotate_to_goal_heading: false' in nav2
+    assert '"RotateToGoal"' not in nav2
+    assert '"GoalAlign"' not in nav2
     assert re.search(r'xy_goal_tolerance:\s*0\.35\b', nav2)
 
 
-def test_navigation_turns_are_bounded_and_use_the_rotation_shim():
+def test_navigation_is_direction_neutral_and_turns_are_bounded():
     nav2 = read('config/nav2_params.yaml')
     max_vel_theta = float(
         re.search(r'max_vel_theta:\s*([0-9.]+)', nav2).group(1)
@@ -208,30 +241,49 @@ def test_navigation_turns_are_bounded_and_use_the_rotation_shim():
         ).group(1)
     )
 
-    assert (
-        'plugin: "nav2_rotation_shim_controller::RotationShimController"'
-        in nav2
-    )
-    assert 'primary_controller: "dwb_core::DWBLocalPlanner"' in nav2
-    assert re.search(r'rotate_to_heading_angular_vel:\s*0\.55\b', nav2)
+    assert 'plugin: "dwb_core::DWBLocalPlanner"' in nav2
+    assert 'RotationShimController' not in nav2
+    assert '"PathAlign"' not in nav2
+    assert '"GoalAlign"' not in nav2
+    assert re.search(r'vx_samples:\s*13\b', nav2)
+    assert re.search(r'vtheta_samples:\s*21\b', nav2)
     assert max_vel_theta == 0.80
     assert smoother_theta == max_vel_theta
 
 
 def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
     nav2 = read('config/nav2_params.yaml')
+    safety = read('scripts/safety_node.py')
     inflation_radii = [
         float(value)
         for value in re.findall(r'inflation_radius:\s*([0-9.]+)', nav2)
     ]
+    inflation_scales = [
+        float(value)
+        for value in re.findall(r'cost_scaling_factor:\s*([0-9.]+)', nav2)
+    ]
+    side_start = float(
+        re.search(
+            r"declare_parameter\('side_stop_start_y_m',\s*([0-9.]+)\)",
+            safety,
+        ).group(1)
+    )
+    side_clearance = float(
+        re.search(
+            r"declare_parameter\('side_stop_distance_m',\s*([0-9.]+)\)",
+            safety,
+        ).group(1)
+    )
 
     assert '"ObstacleFootprint"' in nav2
     assert '"BaseObstacle"' not in nav2
     assert re.search(r'ObstacleFootprint\.scale:\s*0\.50\b', nav2)
     assert re.search(r'ObstacleFootprint\.sum_scores:\s*false\b', nav2)
-    assert inflation_radii == [0.75, 1.10]
-    assert re.search(r'vx_samples:\s*12\b', nav2)
-    assert re.search(r'vtheta_samples:\s*24\b', nav2)
+    assert inflation_radii == [0.60, 0.60]
+    assert inflation_scales == [4.0, 4.0]
+    assert abs(inflation_radii[0] - (side_start + side_clearance)) <= 0.01
+    assert re.search(r'vx_samples:\s*13\b', nav2)
+    assert re.search(r'vtheta_samples:\s*21\b', nav2)
 
 
 def test_normal_navigation_can_reverse_safely_and_replans_stably():
@@ -243,9 +295,9 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     )
 
     assert re.search(r'controller_frequency:\s*10\.0\b', nav2)
-    assert re.search(r'min_vel_x:\s*-0\.35\b', nav2)
+    assert re.search(r'min_vel_x:\s*-0\.70\b', nav2)
     assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
-    assert re.search(r'min_velocity:\s*\[-0\.35,\s*0\.0,\s*-0\.80\]', nav2)
+    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-0\.80\]', nav2)
     assert '<RateController hz="0.5">' in behavior_tree
     backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
     spin = '<Spin spin_dist="1.57"/>'
@@ -304,6 +356,9 @@ def test_serial_devices_are_launch_parameters():
     assert "' motor_device:='" in rsp_launch
     assert "{'port': port}" in lidar_launch
     assert '<param name="device">$(arg motor_device)</param>' in control_xacro
+    assert 'from launch_ros.parameter_descriptions import ParameterValue' in rsp_launch
+    assert 'robot_description = ParameterValue(' in rsp_launch
+    assert 'value_type=str' in rsp_launch
 
 
 def test_cyclonedds_base_config_has_no_machine_specific_peers():

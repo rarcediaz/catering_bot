@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -15,16 +16,19 @@ def generate_launch_description():
 
     pkg_path = get_package_share_directory('my_bot')
     xacro_file = os.path.join(pkg_path, 'description', 'robot.urdf.xacro')
-    robot_description = Command([
-        'xacro ',
-        xacro_file,
-        ' use_ros2_control:=',
-        use_ros2_control,
-        ' sim_mode:=',
-        sim_mode,
-        ' motor_device:=',
-        motor_device,
-    ])
+    robot_description = ParameterValue(
+        Command([
+            'xacro ',
+            xacro_file,
+            ' use_ros2_control:=',
+            use_ros2_control,
+            ' sim_mode:=',
+            sim_mode,
+            ' motor_device:=',
+            motor_device,
+        ]),
+        value_type=str,
+    )
 
     robot_state_publisher = Node(
         package='robot_state_publisher',

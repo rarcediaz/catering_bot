@@ -158,27 +158,17 @@ controller_server:
       xy_goal_tolerance: 0.35
     # DWB parameters
     FollowPath:
-      # Use a deliberate, collision-checked in-place turn when a new path is
-      # substantially behind the robot. This is more decisive than asking DWB
-      # to discover a slow turning arc, while remaining well below the old
-      # 1.57 rad/s angular ceiling.
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
-      angular_dist_threshold: 0.70
-      angular_disengage_threshold: 0.35
-      forward_sampling_distance: 0.50
-      rotate_to_heading_angular_vel: 0.55
-      max_angular_accel: 0.80
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false
-      closed_loop: true
+      # Score motion directly around the drive axle. A rotation shim would
+      # turn the front toward every new path and therefore defeat ordinary
+      # reverse driving even when backing up is the simplest safe motion.
+      plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: False
       # Let the local planner choose a collision-checked reverse trajectory
       # during an ordinary mission when backing into open space is safer than
       # turning near a wall. The DWB Oscillation critic prevents rapid sign
       # flipping, and the Pi independently rejects reverse whenever its rear
       # lidar sector is unsafe.
-      min_vel_x: -0.35
+      min_vel_x: -0.70
       min_vel_y: 0.0
       max_vel_x: 0.70
       max_vel_y: 0.0
@@ -197,9 +187,12 @@ controller_server:
       # Footprint-aware scoring is more expensive than center-cell scoring.
       # These samples preserve useful differential-drive choices while keeping
       # the 20 Hz command stream inside the Pi deadman margin.
-      vx_samples: 12
+      # Odd sample counts explicitly include zero linear and angular velocity,
+      # preserving straight and in-place choices without increasing the total
+      # trajectory workload.
+      vx_samples: 13
       vy_samples: 5
-      vtheta_samples: 24
+      vtheta_samples: 21
       sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.025
@@ -208,7 +201,10 @@ controller_server:
       trans_stopped_velocity: 0.06
       short_circuit_trajectory_evaluation: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      # No heading or forward-point critics: path direction and final yaw are
+      # intentionally irrelevant. Distance and footprint costs decide whether
+      # to move forward, reverse, arc, or rotate in place.
+      critics: ["Oscillation", "ObstacleFootprint", "PathDist", "GoalDist"]
       # BaseObstacle only checks the center cell and is valid only for circular
       # robots. ObstacleFootprint rejects any trajectory that collides with the
       # long trolley body. Use the worst footprint cost instead of summing every
@@ -216,15 +212,8 @@ controller_server:
       # valid trajectories and made the robot crawl or stop in open routes.
       ObstacleFootprint.scale: 0.50
       ObstacleFootprint.sum_scores: false
-      PathAlign.scale: 4.0
-      PathAlign.forward_point_distance: 0.05
-      GoalAlign.scale: 3.0
-      GoalAlign.forward_point_distance: 0.05
       PathDist.scale: 20.0
       GoalDist.scale: 14.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
   local_costmap:
@@ -235,22 +224,23 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: False
       rolling_window: true
-      # base_link is near the rear axle and the footprint reaches ~0.97 m
-      # forward. A 3 m window left only ~0.53 m of look-ahead beyond the body.
+      # base_link is the drive-axle midpoint. The footprint is deliberately
+      # asymmetric because most of the trolley extends in front of the axle.
       width: 5
       height: 5
       resolution: 0.05
-      footprint: "[[-0.10, -0.305], [0.967, -0.305], [0.967, 0.305], [-0.10, 0.305]]"
+      footprint: "[[-0.15, -0.305], [0.917, -0.305], [0.917, 0.305], [-0.15, 0.305]]"
       footprint_padding: 0.04
       plugins: ["voxel_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # Keep local trajectory scoring responsive. Collision rejection still
-        # uses the complete padded footprint, while the independent Pi safety
-        # gate remains the final hard-stop layer.
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.75
+        # Match the Pi's ~0.59 m side-intervention envelope from the axle
+        # center. The exact padded footprint still rejects collisions; this
+        # field guides DWB without making physically safe narrow aisles look
+        # unusable.
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.60
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -289,7 +279,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
-      footprint: "[[-0.10, -0.305], [0.967, -0.305], [0.967, 0.305], [-0.10, 0.305]]"
+      footprint: "[[-0.15, -0.305], [0.917, -0.305], [0.917, 0.305], [-0.15, 0.305]]"
       footprint_padding: 0.04
       resolution: 0.05
       track_unknown_space: true
@@ -319,12 +309,12 @@ global_costmap:
         filter_info_topic: "/costmap_filter_info"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # The global field stays wider than the local scoring field so NavFn
-        # prefers routes that do not lead the long trolley into the Pi's front
-        # safety envelope. Unlike the former local setting, this does not sum a
-        # large cost at every DWB trajectory sample.
-        cost_scaling_factor: 1.8
-        inflation_radius: 1.10
+        # Use the same clearance model as local control and Pi side safety so
+        # NavFn may choose a narrow route when it is the cleanest valid path.
+        # Inflation remains a preference; the padded footprint is the hard
+        # geometric collision boundary.
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.60
       always_send_full_costmap: True
 
 map_server:
@@ -416,7 +406,7 @@ velocity_smoother:
     # controller still enforce local stopping and hardware limits.
     feedback: "OPEN_LOOP"
     max_velocity: [0.70, 0.0, 0.80]
-    min_velocity: [-0.35, 0.0, -0.80]
+    min_velocity: [-0.70, 0.0, -0.80]
     max_accel: [0.35, 0.0, 1.00]
     max_decel: [-2.00, 0.0, -1.20]
     odom_topic: "/diff_cont/odom"
