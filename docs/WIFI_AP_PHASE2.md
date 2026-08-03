@@ -154,6 +154,17 @@ otherwise saved profiles are tried before the recovery AP:
 ./src/my_bot/scripts/install_wifi_provisioning_service.sh --enable
 ```
 
+When deploying while SSH is connected through `IntelliTrolley`, do not restart
+the network gate inside that SSH session. Install and enable the units for the
+next boot instead:
+
+```bash
+./src/my_bot/scripts/install_wifi_provisioning_service.sh --enable-next-boot
+```
+
+This leaves the active hotspot and SSH session unchanged. Reboot explicitly
+after the build and installation are complete.
+
 The installer enables both `my-bot-network-ready.service` and
 `my-bot-wifi-provisioning.service`. Provisioning mutations remain locked unless:
 

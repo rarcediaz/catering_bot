@@ -660,6 +660,8 @@ def test_provisioning_and_robot_services_are_gated_on_wifi_readiness():
     assert "Requires=NetworkManager.service" in network_unit
     assert "Wants=my-bot-robot.service" in network_unit
     assert 'ENABLE_SERVICE=false' in installer
+    assert 'START_SERVICE=false' in installer
+    assert '--enable-next-boot' in installer
     assert 'if [[ "${ENABLE_SERVICE}" == true ]]' in installer
     assert "ROBOT_WIFI_LOSS_GRACE_S=90" in installer
 

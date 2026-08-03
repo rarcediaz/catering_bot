@@ -13,17 +13,21 @@ NETWORK_SYSTEMD_PATH="/etc/systemd/system/${NETWORK_SERVICE_NAME}"
 DEFAULTS_PATH="/etc/default/my-bot-wifi-provisioning"
 DRY_RUN=false
 ENABLE_SERVICE=false
+START_SERVICE=false
 
 usage() {
   cat <<'EOF'
-Usage: install_wifi_provisioning_service.sh [--dry-run] [--enable]
+Usage: install_wifi_provisioning_service.sh [--dry-run] [--enable|--enable-next-boot]
 
   --dry-run  Validate and print the rendered unit without changing the system.
   --enable   Enable and start the Wi-Fi gate and provisioning UI.
+  --enable-next-boot
+              Enable both units without restarting the active network. Use this
+              while deploying through the IntelliTrolley recovery hotspot.
 
-Without --enable, the units and defaults are installed but remain disabled and
-stopped. This installer never creates the access-point profile; when enabled,
-the gate may activate an already-installed profile.
+Without an enable option, the units and defaults are installed but remain
+disabled and stopped. This installer never creates the access-point profile;
+when started, the gate may activate an already-installed profile.
 EOF
 }
 
@@ -33,6 +37,10 @@ while (( $# > 0 )); do
       DRY_RUN=true
       ;;
     --enable)
+      ENABLE_SERVICE=true
+      START_SERVICE=true
+      ;;
+    --enable-next-boot)
       ENABLE_SERVICE=true
       ;;
     -h|--help)
@@ -143,9 +151,13 @@ sudo systemctl daemon-reload
 
 if [[ "${ENABLE_SERVICE}" == true ]]; then
   sudo systemctl enable "${NETWORK_SERVICE_NAME}" "${SERVICE_NAME}"
-  sudo systemctl restart "${NETWORK_SERVICE_NAME}"
-  sudo systemctl restart "${SERVICE_NAME}"
-  action="installed, enabled, and started after Wi-Fi became ready"
+  if [[ "${START_SERVICE}" == true ]]; then
+    sudo systemctl restart "${NETWORK_SERVICE_NAME}"
+    sudo systemctl restart "${SERVICE_NAME}"
+    action="installed, enabled, and started after Wi-Fi became ready"
+  else
+    action="installed and enabled for the next boot without changing the active network"
+  fi
 else
   sudo systemctl disable --now "${NETWORK_SERVICE_NAME}" >/dev/null 2>&1 || true
   sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
