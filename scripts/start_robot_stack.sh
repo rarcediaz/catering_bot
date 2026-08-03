@@ -14,7 +14,7 @@ ROBOT_WATCHDOG_STARTUP_GRACE_S="${ROBOT_WATCHDOG_STARTUP_GRACE_S:-20}"
 ROBOT_WATCHDOG_INTERVAL_S="${ROBOT_WATCHDOG_INTERVAL_S:-2}"
 ROBOT_WATCHDOG_FAILURE_LIMIT="${ROBOT_WATCHDOG_FAILURE_LIMIT:-3}"
 ROBOT_CYCLONEDDS_PEERS="${ROBOT_CYCLONEDDS_PEERS:-}"
-ROBOT_CYCLONEDDS_INTERFACE="${ROBOT_CYCLONEDDS_INTERFACE:-}"
+ROBOT_CYCLONEDDS_INTERFACE="${ROBOT_CYCLONEDDS_INTERFACE:-wlan0}"
 ROBOT_CYCLONEDDS_ALLOW_MULTICAST="${ROBOT_CYCLONEDDS_ALLOW_MULTICAST:-spdp}"
 ROBOT_SERVICE_LOCK_FILE="${ROBOT_SERVICE_LOCK_FILE:-/tmp/my-bot-service-$(id -u).lock}"
 ROBOT_INITIAL_CLEAN_START="${ROBOT_INITIAL_CLEAN_START:-once}"
@@ -23,6 +23,15 @@ ROBOT_INITIAL_CLEAN_MARKER="${ROBOT_INITIAL_CLEAN_MARKER:-${ROBOT_STATE_DIR}/ini
 ROS_LAUNCH_PID=""
 
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+
+assert_wifi_ready() {
+  if ! ip -j -4 address show dev "${ROBOT_CYCLONEDDS_INTERFACE}" \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if any(a.get("family") == "inet" and a.get("scope") == "global" for x in d for a in x.get("addr_info", [])) else 1)'; then
+    echo "Refusing to start ROS: ${ROBOT_CYCLONEDDS_INTERFACE} has no global IPv4 address." >&2
+    exit 1
+  fi
+  echo "ROS network ready on ${ROBOT_CYCLONEDDS_INTERFACE}."
+}
 
 is_true() {
   [[ "$1" =~ ^(1|true|yes|on)$ ]]
@@ -373,6 +382,7 @@ assert_devices_unowned() {
   done
 }
 
+assert_wifi_ready
 perform_initial_clean_start
 configure_cyclonedds
 warn_unstable_device_name lidar "${ROBOT_LIDAR_DEVICE}"

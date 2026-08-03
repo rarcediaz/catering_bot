@@ -25,12 +25,12 @@ def make_safety_node(scan_healthy=True):
     node.closest_left_clearance = float('inf')
     node.closest_right_clearance = float('inf')
     node.closest_rear_clearance = float('inf')
-    node.obstacle_stop_distance_m = 0.20
+    node.obstacle_stop_distance_m = 0.25
     node.obstacle_stop_distance_max_m = 0.60
     node.obstacle_stop_speed_mps = 0.60
     node.obstacle_slowdown_margin_m = 0.15
     node.side_stop_distance_m = 0.25
-    node.side_hard_stop_distance_m = 0.03
+    node.side_hard_stop_distance_m = 0.08
     node.side_min_speed_scale = 0.25
     node.command_epsilon = 0.005
     node.nav_constraint_reason = ''
@@ -99,7 +99,7 @@ def test_front_slowdown_scales_only_forward_motion():
     node = make_safety_node()
     # This clearance admits 0.10 m/s with the configured linear clearance
     # model, so a 0.40 m/s raw request is scaled to one quarter.
-    node.closest_forward_clearance = 0.20 + ((0.10 / 0.60) * 0.55)
+    node.closest_forward_clearance = 0.25 + ((0.10 / 0.60) * 0.50)
     limited = node.apply_motion_constraints(make_command(0.4, 0.6))
     assert abs(limited.linear.x - 0.1) < 1e-9
     assert abs(limited.angular.z - 0.15) < 1e-9
@@ -110,7 +110,7 @@ def test_hard_stop_boundary_is_fixed_and_allows_controlled_slowdown():
     node = make_safety_node()
     node.forward_speed_mps = 0.60
     stop_distance, measured_speed = node.get_dynamic_stop_distance()
-    assert stop_distance == 0.20
+    assert stop_distance == 0.25
     assert measured_speed == 0.60
 
     # The hard boundary does not move with odometry. The raw command may remain
@@ -118,7 +118,7 @@ def test_hard_stop_boundary_is_fixed_and_allows_controlled_slowdown():
     # command before that boundary is reached.
     node.forward_speed_mps = 0.0
     stop_distance, measured_speed = node.get_dynamic_stop_distance()
-    assert stop_distance == 0.20
+    assert stop_distance == 0.25
     assert measured_speed == 0.0
     node.closest_forward_clearance = 0.30
     limited = node.apply_motion_constraints(make_command(0.70)).linear.x
@@ -140,9 +140,11 @@ def test_side_obstacles_progressively_slow_only_turns_toward_them():
     node = make_safety_node()
     node.left_obstacle_active = True
     node.left_turn_scale = node.get_side_turn_scale(0.14)
-    assert abs(node.left_turn_scale - 0.625) < 1e-9
+    expected_scale = 0.25 + 0.75 * ((0.14 - 0.08) / (0.25 - 0.08))
+    assert abs(node.left_turn_scale - expected_scale) < 1e-9
     assert abs(
-        node.apply_motion_constraints(make_command(angular=0.5)).angular.z - 0.3125
+        node.apply_motion_constraints(make_command(angular=0.5)).angular.z
+        - (0.5 * expected_scale)
     ) < 1e-9
     assert node.apply_motion_constraints(make_command(angular=-0.5)).angular.z == -0.5
     assert node.get_nav_constraint_reason(
@@ -154,7 +156,8 @@ def test_side_obstacles_progressively_slow_only_turns_toward_them():
     node.right_obstacle_active = True
     node.right_turn_scale = node.get_side_turn_scale(0.14)
     assert abs(
-        node.apply_motion_constraints(make_command(angular=-0.5)).angular.z + 0.3125
+        node.apply_motion_constraints(make_command(angular=-0.5)).angular.z
+        + (0.5 * expected_scale)
     ) < 1e-9
     assert node.apply_motion_constraints(make_command(angular=0.5)).angular.z == 0.5
     assert node.get_nav_constraint_reason(
@@ -181,7 +184,7 @@ def test_side_slowdown_preserves_a_translating_arcs_curvature():
 def test_side_turn_hard_stop_is_reserved_for_imminent_contact():
     node = make_safety_node()
     node.right_obstacle_active = True
-    node.right_turn_scale = node.get_side_turn_scale(0.03)
+    node.right_turn_scale = node.get_side_turn_scale(0.08)
 
     safe = node.apply_motion_constraints(make_command(angular=-0.5))
     assert safe.angular.z == 0.0
@@ -189,7 +192,7 @@ def test_side_turn_hard_stop_is_reserved_for_imminent_contact():
         make_command(angular=-0.5), safe
     ) == 'right_turn_stop'
 
-    node.right_turn_scale = node.get_side_turn_scale(0.031)
+    node.right_turn_scale = node.get_side_turn_scale(0.081)
     assert node.apply_motion_constraints(
         make_command(angular=-0.5)
     ).angular.z < 0.0

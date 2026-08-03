@@ -220,6 +220,20 @@ select:focus {
   grid-column: 1 / -1;
 }
 
+#network-results-field {
+  grid-column: 1 / -1;
+}
+
+#network-results {
+  min-height: 9rem;
+  padding: 5px;
+}
+
+#network-results option {
+  padding: 9px 8px;
+  border-radius: 7px;
+}
+
 .password-row {
   display: grid;
   grid-template-columns: 1fr auto;

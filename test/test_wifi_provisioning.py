@@ -31,12 +31,14 @@ from wifi_provisioning_server import (  # noqa: E402
     validate_psk,
     validate_ssid,
 )
+from preview_wifi_provisioning_ui import PreviewManager  # noqa: E402
 
 
 class FakeRunner(CommandRunner):
     def __init__(self):
         self.active = "intellitrolley-ap"
         self.address = "10.42.0.1/24"
+        self.robot_active = True
         self.commands = []
 
     def run(self, command, *, timeout=15.0, check=True):
@@ -91,6 +93,21 @@ class FakeRunner(CommandRunner):
                 'o "/org/freedesktop/NetworkManager/Checkpoint/8"\n',
                 "",
             )
+        if command[:3] == ["systemctl", "is-active", "--quiet"]:
+            return subprocess.CompletedProcess(
+                command,
+                0 if self.robot_active else 3,
+                "",
+                "",
+            )
+        if command[:2] == ["systemctl", "stop"]:
+            self.robot_active = False
+        elif command[:2] in (["systemctl", "start"], ["systemctl", "restart"]):
+            self.robot_active = True
+        if command[:5] == ["nmcli", "--wait", "45", "connection", "up"]:
+            connection_index = command.index("id") + 1
+            self.active = command[connection_index]
+            self.address = "192.168.40.18/24"
         return subprocess.CompletedProcess(command, 0, "", "")
 
 
@@ -227,11 +244,109 @@ def test_switch_uses_networkmanager_dbus_checkpoint_and_never_passes_psk(tmp_pat
         "aouu",
         "1",
         "/org/freedesktop/NetworkManager/Devices/3",
-        "180",
+        "210",
         "0",
     ]
     assert "correct-horse-battery" not in " ".join(command)
     assert "zrpi-desktop.local:8090" in response["confirm_url"]
+    assert response["timeout_s"] == 180
+    assert "deadline" not in response
+
+
+def test_network_switch_stops_ros_then_restarts_after_ipv4_is_ready(tmp_path):
+    runner = FakeRunner()
+    manager = make_manager(tmp_path, runner)
+    manager.pending_connection = facility_connection_name("Facility WiFi")
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_deadline = time.monotonic() + 120
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    manager._start_checkpoint_switch()
+
+    checkpoint_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if "CheckpointCreate" in command
+    )
+    stop_index = runner.commands.index(
+        ["systemctl", "stop", "my-bot-robot.service"]
+    )
+    wifi_up_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command[:5] == ["nmcli", "--wait", "45", "connection", "up"]
+    )
+    assert checkpoint_index < stop_index < wifi_up_index
+    assert manager.pending_robot_was_active is True
+    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    manager.rollback_timer.cancel()
+
+
+def test_network_switch_restarts_robot_even_if_service_was_inactive(tmp_path):
+    runner = FakeRunner()
+    runner.robot_active = False
+    manager = make_manager(tmp_path, runner)
+    manager.pending_connection = facility_connection_name("Facility WiFi")
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_deadline = time.monotonic() + 120
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    manager._start_checkpoint_switch()
+
+    assert ["systemctl", "stop", "my-bot-robot.service"] in runner.commands
+    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    manager.rollback_timer.cancel()
+
+
+def test_hotspot_rollback_stops_then_ensures_ros_restarts(tmp_path):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Facility WiFi")
+    manager = make_manager(tmp_path, runner)
+    manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager.pending_connection = facility_connection_name("Facility WiFi")
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_robot_was_active = True
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    manager._checkpoint_expired(manager.pending_checkpoint)
+
+    assert any("CheckpointRollback" in command for command in runner.commands)
+    stop_index = runner.commands.index(
+        ["systemctl", "stop", "my-bot-robot.service"]
+    )
+    rollback_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if "CheckpointRollback" in command
+    )
+    assert stop_index < rollback_index
+    assert [
+        "nmcli",
+        "--wait",
+        "30",
+        "connection",
+        "up",
+        "id",
+        "intellitrolley-ap",
+        "ifname",
+        "wlan0",
+    ] in runner.commands
+    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    assert manager.pending_robot_was_active is False
+
+
+def test_robot_service_refresh_starts_an_inactive_unit(tmp_path):
+    runner = FakeRunner()
+    runner.robot_active = False
+    manager = make_manager(tmp_path, runner)
+
+    manager._refresh_robot_service(ensure_running=True, delay_s=0.0)
+
+    assert ["systemctl", "start", "my-bot-robot.service"] in runner.commands
+    assert runner.robot_active is True
 
 
 def test_confirm_commits_checkpoint_and_updates_reciprocal_peer(tmp_path):
@@ -245,13 +360,16 @@ def test_confirm_commits_checkpoint_and_updates_reciprocal_peer(tmp_path):
     ).hexdigest()
     manager.pending_connection = runner.active
     manager.pending_ssid = "Facility WiFi"
-    manager.pending_deadline = time.time() + 120
+    manager.pending_deadline = time.monotonic() + 120
     manager.pending_checkpoint = (
         "/org/freedesktop/NetworkManager/Checkpoint/8"
     )
     manager.staged_connection = runner.active
     manager.staged_ssid = "Facility WiFi"
     manager.staged_security = "wpa-psk"
+    manager.pending_robot_was_active = True
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
 
     result = manager.confirm(
         remote_address="192.168.40.25",
@@ -267,11 +385,39 @@ def test_confirm_commits_checkpoint_and_updates_reciprocal_peer(tmp_path):
     assert result["configuration_uri"].startswith(
         "intellitrolley://configure-network?"
     )
+    assert scheduled == [{"ensure_running": True, "delay_s": 2.0}]
+
+
+def test_confirmation_ignores_wall_clock_jump_after_internet_connects(
+    tmp_path,
+    monkeypatch,
+):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Facility WiFi")
+    runner.address = "192.168.40.18/24"
+    manager = make_manager(tmp_path, runner)
+    token = "ntp-safe-token"
+    manager.pending_token_hash = __import__("hashlib").sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+    manager.pending_connection = runner.active
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_deadline = time.monotonic() + 120
+    manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager._schedule_robot_service_refresh = lambda **kwargs: None
+
+    monkeypatch.setattr(time, "time", lambda: 4_102_444_800.0)
+    result = manager.confirm(remote_address="192.168.40.25", token=token)
+
+    assert result["confirmed"] is True
+    assert any("CheckpointDestroy" in command for command in runner.commands)
 
 
 def test_keep_hotspot_updates_peers_without_switching_wifi(tmp_path):
     runner = FakeRunner()
     manager = make_manager(tmp_path, runner)
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
 
     result = manager.configure_current_ap("10.42.0.22")
 
@@ -283,6 +429,7 @@ def test_keep_hotspot_updates_peers_without_switching_wifi(tmp_path):
     assert "robot=10.42.0.1" in result["configuration_uri"]
     defaults = manager.robot_defaults_path.read_text(encoding="utf-8")
     assert "ROBOT_CYCLONEDDS_PEERS=10.42.0.22" in defaults
+    assert scheduled == [{"ensure_running": True, "delay_s": 2.0}]
 
 
 def test_env_update_preserves_unrelated_robot_settings(tmp_path):
@@ -305,7 +452,7 @@ def test_env_update_preserves_unrelated_robot_settings(tmp_path):
     assert "ROBOT_CYCLONEDDS_INTERFACE=wlan0" in content
 
 
-def test_provisioning_unit_is_separate_hardened_and_disabled_by_default():
+def test_provisioning_and_robot_services_are_gated_on_wifi_readiness():
     unit = (
         PACKAGE_ROOT / "systemd/my-bot-wifi-provisioning.service.in"
     ).read_text(encoding="utf-8")
@@ -315,11 +462,19 @@ def test_provisioning_unit_is_separate_hardened_and_disabled_by_default():
     robot_unit = (
         PACKAGE_ROOT / "systemd/my-bot-robot.service.in"
     ).read_text(encoding="utf-8")
-    assert "After=NetworkManager.service" in unit
+    network_unit = (
+        PACKAGE_ROOT / "systemd/my-bot-network-ready.service.in"
+    ).read_text(encoding="utf-8")
+    assert "Requires=my-bot-network-ready.service" in unit
+    assert "After=my-bot-network-ready.service" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/etc/NetworkManager/system-connections" in unit
-    assert "my-bot-wifi-provisioning" not in robot_unit
+    assert "Requires=my-bot-network-ready.service" in robot_unit
+    assert "After=local-fs.target my-bot-network-ready.service" in robot_unit
+    assert "Before=my-bot-wifi-provisioning.service my-bot-robot.service" in network_unit
+    assert "Requires=NetworkManager.service" in network_unit
+    assert "Wants=my-bot-robot.service" in network_unit
     assert 'ENABLE_SERVICE=false' in installer
     assert 'if [[ "${ENABLE_SERVICE}" == true ]]' in installer
 
@@ -337,6 +492,38 @@ def test_provisioning_ui_never_places_password_in_query_or_storage():
     assert "sessionStorage" not in javascript
     assert "?password=" not in javascript
     assert 'api("/api/use-ap"' in javascript
+    assert 'id="network-results"' in html
+    assert "visibleOption.textContent" in javascript
+    assert "startCountdown(body.timeout_s)" in javascript
+
+
+def test_local_ui_preview_exercises_scan_switch_and_confirmation():
+    manager = PreviewManager(port=8090)
+    networks = manager.scan_networks("127.0.0.1")
+    assert [network["ssid"] for network in networks] == [
+        "Warehouse WiFi",
+        "Office-5G",
+        "Guest Network",
+        "Corporate 802.1X",
+    ]
+
+    staged = manager.stage(
+        remote_address="127.0.0.1",
+        ssid="Warehouse WiFi",
+        password="preview-password",
+        security="wpa-psk",
+        hidden=False,
+    )
+    activated = manager.activate("127.0.0.1")
+    confirmed = manager.confirm(
+        remote_address="127.0.0.1",
+        token="preview-token",
+    )
+
+    assert staged["staged"] is True
+    assert activated["timeout_s"] == 180
+    assert activated["confirm_url"].endswith("?confirm=preview-token")
+    assert confirmed["confirmed"] is True
 
 
 def test_http_ui_is_no_store_and_rejects_mutation_outside_ap(tmp_path):

@@ -38,8 +38,10 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz')
     map_file = LaunchConfiguration('map')
     keepout_mask_file = LaunchConfiguration('keepout_mask')
+    preferred_mask_file = LaunchConfiguration('preferred_mask')
     display_map_file = LaunchConfiguration('display_map')
     use_keepout = LaunchConfiguration('use_keepout')
+    use_preferred = LaunchConfiguration('use_preferred')
     use_display_map = LaunchConfiguration('use_display_map')
     isolate_localization = LaunchConfiguration('isolate_localization')
 
@@ -75,6 +77,8 @@ def generate_launch_description():
             'map': map_file,
             'use_keepout': use_keepout,
             'keepout_mask': keepout_mask_file,
+            'use_preferred': use_preferred,
+            'preferred_mask': preferred_mask_file,
             'use_display_map': use_display_map,
             'display_map': display_map_file,
             'isolate_localization': isolate_localization,
@@ -91,6 +95,7 @@ def generate_launch_description():
 
     default_map = os.path.join(package_share, 'maps', 'atrium_navigation.yaml')
     default_keepout_mask = os.path.join(package_share, 'maps', 'atrium_keepout.yaml')
+    default_preferred_mask = os.path.join(package_share, 'maps', 'atrium_preferred.yaml')
     default_display_map = os.path.join(package_share, 'maps', 'atrium_display.yaml')
 
     return LaunchDescription([
@@ -143,6 +148,16 @@ def generate_launch_description():
             'keepout_mask',
             default_value=default_keepout_mask,
             description='Full path to the keepout mask YAML file.'
+        ),
+        DeclareLaunchArgument(
+            'use_preferred',
+            default_value='true',
+            description='Apply the soft preferred-route mask while navigating.'
+        ),
+        DeclareLaunchArgument(
+            'preferred_mask',
+            default_value=default_preferred_mask,
+            description='Full path to the preferred-route mask YAML file.'
         ),
         DeclareLaunchArgument(
             'use_display_map',

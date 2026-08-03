@@ -23,8 +23,10 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_file = LaunchConfiguration('map')
     keepout_mask_file = LaunchConfiguration('keepout_mask')
+    preferred_mask_file = LaunchConfiguration('preferred_mask')
     display_map_file = LaunchConfiguration('display_map')
     use_keepout = LaunchConfiguration('use_keepout')
+    use_preferred = LaunchConfiguration('use_preferred')
     use_display_map = LaunchConfiguration('use_display_map')
     navigation_use_composition = LaunchConfiguration('navigation_use_composition')
     isolate_localization = LaunchConfiguration('isolate_localization')
@@ -45,6 +47,7 @@ def generate_launch_description():
             'default_nav_to_pose_bt_xml': navigate_to_pose_bt_file,
             'local_costmap.local_costmap.ros__parameters.keepout_filter.enabled': use_keepout,
             'global_costmap.global_costmap.ros__parameters.keepout_filter.enabled': use_keepout,
+            'global_costmap.global_costmap.ros__parameters.preferred_filter.enabled': use_preferred,
         },
         convert_types=True,
     )
@@ -269,6 +272,52 @@ def generate_launch_description():
         ],
     )
 
+    preferred_servers = GroupAction(
+        condition=IfCondition(use_preferred),
+        actions=[
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='preferred_mask_server',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'yaml_filename': preferred_mask_file,
+                    'topic_name': 'preferred_filter_mask',
+                    'frame_id': 'map',
+                }],
+            ),
+            Node(
+                package='nav2_map_server',
+                executable='costmap_filter_info_server',
+                name='preferred_costmap_filter_info_server',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'type': 0,
+                    'filter_info_topic': 'preferred_costmap_filter_info',
+                    'mask_topic': '/preferred_filter_mask',
+                    'base': 0.0,
+                    'multiplier': 1.0,
+                }],
+            ),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_preferred',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'autostart': True,
+                    'node_names': [
+                        'preferred_mask_server',
+                        'preferred_costmap_filter_info_server',
+                    ],
+                }],
+            ),
+        ],
+    )
+
     display_server = GroupAction(
         condition=IfCondition(use_display_map),
         actions=[
@@ -337,6 +386,16 @@ def generate_launch_description():
             description='Full path to the keepout mask YAML file.'
         ),
         DeclareLaunchArgument(
+            'use_preferred',
+            default_value='false',
+            description='Apply the soft preferred-route mask to the global costmap.'
+        ),
+        DeclareLaunchArgument(
+            'preferred_mask',
+            default_value='',
+            description='Full path to the preferred-route mask YAML file.'
+        ),
+        DeclareLaunchArgument(
             'use_display_map',
             default_value='false',
             description='Publish a UI-only map on /display_map.'
@@ -352,6 +411,7 @@ def generate_launch_description():
             description='Full path to the Nav2 parameter YAML file.'
         ),
         keepout_servers,
+        preferred_servers,
         display_server,
         standard_nav2,
         split_nav2,

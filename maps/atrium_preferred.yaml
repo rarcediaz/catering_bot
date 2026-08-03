@@ -1,4 +1,4 @@
-image: atrium_display.pgm
+image: atrium_preferred.pgm
 mode: scale
 resolution: 0.05
 origin: [0.0, 0.0, 0.0]

@@ -122,7 +122,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'obstacle_stop_distance_m',
-            default_value='0.20',
+            default_value='0.25',
             description=(
                 'Immediate Pi-local hard-stop clearance in meters; motion is '
                 'progressively slowed before reaching this boundary.'
@@ -171,7 +171,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'side_hard_stop_distance_m',
-            default_value='0.03',
+            default_value='0.08',
             description=(
                 'Stop a turn toward an obstacle only inside this imminent '
                 'side-collision clearance in meters.'

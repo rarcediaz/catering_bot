@@ -37,6 +37,7 @@ MAX_BODY_BYTES = 8192
 SUPPORTED_SECURITY = {"wpa-psk", "open"}
 CONNECTION_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
+CHECKPOINT_ROLLBACK_GRACE_S = 30
 
 
 class ProvisioningError(RuntimeError):
@@ -274,8 +275,8 @@ class CommandRunner:
             text=True,
             timeout=timeout,
             env={
-                "LANG": "C",
-                "LC_ALL": "C",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
                 "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
             },
         )
@@ -322,6 +323,7 @@ class ProvisioningManager:
         self.pending_connection = ""
         self.pending_ssid = ""
         self.pending_deadline = 0.0
+        self.pending_robot_was_active = False
         self.last_result = ""
         self.staged_connection = ""
         self.staged_ssid = ""
@@ -341,6 +343,9 @@ class ProvisioningManager:
         self.staged_ssid = str(payload.get("staged_ssid") or "")
         self.staged_security = str(payload.get("staged_security") or "")
         if payload.get("phase") == "pending":
+            self.pending_robot_was_active = bool(
+                payload.get("pending_robot_was_active", False)
+            )
             self.last_result = (
                 "A previous switch was interrupted. NetworkManager will restore "
                 "the previous connection through its checkpoint."
@@ -356,6 +361,7 @@ class ProvisioningManager:
             "pending_connection": self.pending_connection,
             "pending_ssid": self.pending_ssid,
             "pending_deadline": self.pending_deadline,
+            "pending_robot_was_active": self.pending_robot_was_active,
             "last_result": self.last_result,
         }
         temporary_fd, temporary_name = tempfile.mkstemp(
@@ -432,9 +438,10 @@ class ProvisioningManager:
         except ProvisioningError:
             interface_address = None
         with self.lock:
+            remaining_s = max(0.0, self.pending_deadline - time.monotonic())
             pending = bool(
                 self.pending_connection
-                and self.pending_deadline > time.time()
+                and remaining_s > 0.0
             )
             return {
                 "interface": self.interface,
@@ -456,7 +463,7 @@ class ProvisioningManager:
                 "pending": (
                     {
                         "ssid": self.pending_ssid,
-                        "deadline": self.pending_deadline,
+                        "expires_in_s": int(remaining_s),
                     }
                     if pending
                     else None
@@ -582,7 +589,10 @@ class ProvisioningManager:
             ).hexdigest()
             self.pending_connection = self.staged_connection
             self.pending_ssid = self.staged_ssid
-            self.pending_deadline = time.time() + self.switch_timeout_s
+            # A Raspberry Pi without an RTC can correct its wall clock as soon
+            # as facility internet becomes available. Never use wall time for
+            # a safety rollback deadline.
+            self.pending_deadline = time.monotonic() + self.switch_timeout_s
             self.last_result = (
                 "Switch scheduled. It will roll back automatically unless confirmed."
             )
@@ -600,7 +610,7 @@ class ProvisioningManager:
         return {
             "accepted": True,
             "ssid": self.pending_ssid,
-            "deadline": self.pending_deadline,
+            "timeout_s": self.switch_timeout_s,
             "confirm_url": confirm_url,
             "message": (
                 "Connect the Windows central computer to the facility Wi-Fi, "
@@ -621,6 +631,10 @@ class ProvisioningManager:
                     self._rollback_checkpoint(checkpoint)
                     return
                 self.pending_checkpoint = checkpoint
+            robot_was_active = self._stop_robot_service_for_switch()
+            with self.lock:
+                self.pending_robot_was_active = robot_was_active
+                self._save_state("pending")
             self.runner.run(
                 [
                     "nmcli",
@@ -635,23 +649,50 @@ class ProvisioningManager:
                 ],
                 timeout=55,
             )
+            if self.active_connection() != connection_name:
+                raise ProvisioningError(
+                    "Facility Wi-Fi activation returned without selecting the "
+                    "staged connection.",
+                    HTTPStatus.BAD_GATEWAY,
+                )
+            if self.interface_ipv4() is None:
+                raise ProvisioningError(
+                    "Facility Wi-Fi connected without receiving an IPv4 address.",
+                    HTTPStatus.BAD_GATEWAY,
+                )
         except (OSError, ProvisioningError, subprocess.TimeoutExpired) as exc:
             with self.lock:
                 checkpoint = self.pending_checkpoint
             if checkpoint:
                 self._rollback_checkpoint(checkpoint)
             with self.lock:
+                restart_robot = self.pending_robot_was_active
                 self.pending_checkpoint = ""
                 self.last_result = f"Could not activate facility Wi-Fi: {exc}"
                 self.pending_connection = ""
                 self.pending_ssid = ""
                 self.pending_deadline = 0.0
                 self.pending_token_hash = ""
+                self.pending_robot_was_active = False
                 self._save_state("failed")
+            self._ensure_recovery_ap()
+            self._schedule_robot_service_refresh(
+                ensure_running=restart_robot,
+                delay_s=3.0,
+            )
             return
+        self._schedule_robot_service_refresh(
+            ensure_running=True,
+            delay_s=1.0,
+        )
         with self.lock:
+            self.last_result = (
+                f"Connected to {self.pending_ssid}; the robot service is "
+                "restarting on the facility network while confirmation remains pending."
+            )
+            self._save_state("pending")
             self.rollback_timer = threading.Timer(
-                max(1.0, self.pending_deadline - time.time() + 3.0),
+                max(1.0, self.pending_deadline - time.monotonic()),
                 self._checkpoint_expired,
                 args=(checkpoint,),
             )
@@ -689,7 +730,7 @@ class ProvisioningManager:
             "aouu",
             "1",
             self._networkmanager_device_path(),
-            str(self.switch_timeout_s),
+            str(self.switch_timeout_s + CHECKPOINT_ROLLBACK_GRACE_S),
             "0",
         ]
 
@@ -728,14 +769,40 @@ class ProvisioningManager:
             checkpoint,
         ]
 
-    def _rollback_checkpoint(self, checkpoint: str) -> None:
+    def _rollback_checkpoint(self, checkpoint: str) -> bool:
         try:
-            self.runner.run(
+            result = self.runner.run(
                 self.checkpoint_action_command(
                     "CheckpointRollback",
                     checkpoint,
                 ),
                 timeout=15,
+                check=False,
+            )
+            return result.returncode == 0
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            return False
+
+    def _ensure_recovery_ap(self) -> None:
+        try:
+            if self.active_connection() == self.ap_connection:
+                return
+        except ProvisioningError:
+            pass
+        try:
+            self.runner.run(
+                [
+                    "nmcli",
+                    "--wait",
+                    "30",
+                    "connection",
+                    "up",
+                    "id",
+                    self.ap_connection,
+                    "ifname",
+                    self.interface,
+                ],
+                timeout=35,
                 check=False,
             )
         except (OSError, ProvisioningError, subprocess.TimeoutExpired):
@@ -747,6 +814,7 @@ class ProvisioningManager:
             if self.pending_checkpoint != checkpoint:
                 return
             self.pending_checkpoint = ""
+            restart_robot = True
             if self.pending_connection:
                 self.last_result = (
                     "Facility Wi-Fi was not confirmed; NetworkManager restored "
@@ -756,7 +824,20 @@ class ProvisioningManager:
                 self.pending_ssid = ""
                 self.pending_deadline = 0.0
                 self.pending_token_hash = ""
+                self.pending_robot_was_active = False
                 self._save_state("rolled_back")
+        # ROS may already be running on the unconfirmed facility network.
+        # Stop it before NetworkManager restores the AP address.
+        try:
+            self._stop_robot_service_for_switch()
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            pass
+        self._rollback_checkpoint(checkpoint)
+        self._ensure_recovery_ap()
+        self._schedule_robot_service_refresh(
+            ensure_running=restart_robot,
+            delay_s=1.0,
+        )
 
     def confirm(
         self,
@@ -793,7 +874,7 @@ class ProvisioningManager:
                     "The confirmation token is invalid or expired.",
                     HTTPStatus.FORBIDDEN,
                 )
-            if time.time() >= self.pending_deadline:
+            if time.monotonic() >= self.pending_deadline:
                 raise ProvisioningError(
                     "The confirmation period expired; reconnect to the Pi hotspot.",
                     HTTPStatus.CONFLICT,
@@ -877,10 +958,13 @@ class ProvisioningManager:
             self.pending_ssid = ""
             self.pending_deadline = 0.0
             self.pending_token_hash = ""
+            restart_robot = True
+            self.pending_robot_was_active = False
 
         handoff = self._apply_network_handoff(
             interface_address=interface_address,
             central_peer=central_peer,
+            ensure_robot_running=restart_robot,
         )
         with self.lock:
             self.last_result = (
@@ -917,6 +1001,7 @@ class ProvisioningManager:
         handoff = self._apply_network_handoff(
             interface_address=interface_address,
             central_peer=central_peer,
+            ensure_robot_running=True,
         )
         with self.lock:
             self.last_result = (
@@ -936,6 +1021,7 @@ class ProvisioningManager:
         *,
         interface_address: ipaddress.IPv4Interface,
         central_peer: ipaddress.IPv4Address,
+        ensure_robot_running: bool = False,
     ) -> Dict[str, Any]:
         ros_domain_id = self._ros_domain_id()
         try:
@@ -956,12 +1042,11 @@ class ProvisioningManager:
             f"&subnet={quote(str(robot_network), safe='')}"
             f"&domain={ros_domain_id}"
         )
-        if defaults_updated:
-            restart_thread = threading.Thread(
-                target=self._restart_robot_service,
-                daemon=True,
+        if defaults_updated or ensure_robot_running:
+            self._schedule_robot_service_refresh(
+                ensure_running=ensure_robot_running,
+                delay_s=2.0,
             )
-            restart_thread.start()
 
         return {
             "robot_address": str(interface_address.ip),
@@ -982,8 +1067,31 @@ class ProvisioningManager:
             return 0
         return max(0, min(232, int(match.group(1))))
 
-    def _restart_robot_service(self) -> None:
-        time.sleep(2.0)
+    def _stop_robot_service_for_switch(self) -> bool:
+        # Stop is idempotent and also catches an activating/restarting unit.
+        # Every intentional interface transition is followed by an ensured
+        # start, regardless of the service state before the switch.
+        self.runner.run(
+            ["systemctl", "stop", self.robot_service],
+            timeout=45,
+        )
+        return True
+
+    def _schedule_robot_service_refresh(
+        self,
+        *,
+        ensure_running: bool,
+        delay_s: float,
+    ) -> None:
+        refresh_thread = threading.Thread(
+            target=self._refresh_robot_service,
+            kwargs={"ensure_running": ensure_running, "delay_s": delay_s},
+            daemon=True,
+        )
+        refresh_thread.start()
+
+    def _refresh_robot_service(self, *, ensure_running: bool, delay_s: float) -> None:
+        time.sleep(delay_s)
         try:
             active = self.runner.run(
                 ["systemctl", "is-active", "--quiet", self.robot_service],
@@ -995,7 +1103,12 @@ class ProvisioningManager:
                     ["systemctl", "restart", self.robot_service],
                     timeout=45,
                 )
-        except (ProvisioningError, subprocess.TimeoutExpired):
+            elif ensure_running:
+                self.runner.run(
+                    ["systemctl", "start", self.robot_service],
+                    timeout=45,
+                )
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
             return
 
     def forget_staged(self, remote_address: str) -> Dict[str, Any]:

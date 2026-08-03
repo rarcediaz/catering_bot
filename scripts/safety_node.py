@@ -16,7 +16,7 @@ class ObstacleSafetyNode(Node):
         super().__init__('obstacle_safety_node')
 
         self.declare_parameter('obstacle_stop_enabled', True)
-        self.declare_parameter('obstacle_stop_distance_m', 0.20)
+        self.declare_parameter('obstacle_stop_distance_m', 0.25)
         self.declare_parameter('obstacle_stop_distance_max_m', 0.60)
         self.declare_parameter('obstacle_stop_speed_mps', 0.60)
         self.declare_parameter('obstacle_slowdown_margin_m', 0.15)
@@ -24,7 +24,7 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('rear_stop_start_x_m', 0.91)
         self.declare_parameter('front_stop_width_m', 0.8596)
         self.declare_parameter('side_stop_distance_m', 0.25)
-        self.declare_parameter('side_hard_stop_distance_m', 0.03)
+        self.declare_parameter('side_hard_stop_distance_m', 0.08)
         self.declare_parameter('side_min_speed_scale', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
         self.declare_parameter('joystick_timeout_sec', 0.25)

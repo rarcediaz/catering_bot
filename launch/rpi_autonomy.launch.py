@@ -20,9 +20,11 @@ def generate_launch_description():
 
     map_file = LaunchConfiguration('map')
     keepout_mask_file = LaunchConfiguration('keepout_mask')
+    preferred_mask_file = LaunchConfiguration('preferred_mask')
     display_map_file = LaunchConfiguration('display_map')
     params_file = LaunchConfiguration('params_file')
     use_keepout = LaunchConfiguration('use_keepout')
+    use_preferred = LaunchConfiguration('use_preferred')
     use_display_map = LaunchConfiguration('use_display_map')
     navigation_use_composition = LaunchConfiguration('navigation_use_composition')
     isolate_localization = LaunchConfiguration('isolate_localization')
@@ -46,6 +48,8 @@ def generate_launch_description():
             'map': map_file,
             'use_keepout': use_keepout,
             'keepout_mask': keepout_mask_file,
+            'use_preferred': use_preferred,
+            'preferred_mask': preferred_mask_file,
             'use_display_map': use_display_map,
             'display_map': display_map_file,
             'params_file': params_file,
@@ -76,6 +80,11 @@ def generate_launch_description():
             description='Keepout mask YAML.',
         ),
         DeclareLaunchArgument(
+            'preferred_mask',
+            default_value=os.path.join(package_share, 'maps', 'atrium_preferred.yaml'),
+            description='Preferred-route mask YAML.',
+        ),
+        DeclareLaunchArgument(
             'display_map',
             default_value=os.path.join(package_share, 'maps', 'atrium_display.yaml'),
             description='UI display map YAML.',
@@ -89,6 +98,11 @@ def generate_launch_description():
             'use_keepout',
             default_value='true',
             description='Apply the keepout mask in local and global costmaps.',
+        ),
+        DeclareLaunchArgument(
+            'use_preferred',
+            default_value='true',
+            description='Apply the soft preferred-route mask to the global costmap.',
         ),
         DeclareLaunchArgument(
             'use_display_map',

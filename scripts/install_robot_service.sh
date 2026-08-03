@@ -81,6 +81,17 @@ The installer requests sudo only for systemd and dialout-group changes.
 EOF
   exit 1
 fi
+if [[ "${DRY_RUN}" == false \
+    && ! -f /etc/systemd/system/my-bot-network-ready.service ]]; then
+  cat >&2 <<'EOF'
+Install and enable the IntelliTrolley Wi-Fi stack before the robot service:
+  ./src/my_bot/scripts/install_wifi_provisioning_service.sh --enable
+
+The ROS service requires the Wi-Fi startup gate so it cannot publish before a
+saved Wi-Fi or the recovery hotspot has an IPv4 address.
+EOF
+  exit 1
+fi
 if [[ ! -f "${ROBOT_WORKSPACE}/install/setup.bash" ]]; then
   cat >&2 <<EOF
 The robot workspace has not been built:

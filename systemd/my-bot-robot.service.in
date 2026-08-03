@@ -1,7 +1,8 @@
 [Unit]
 Description=IntelliTrolley ROS 2 hardware and safety stack
 Documentation=file://@ROBOT_PACKAGE_DIR@/README.md
-After=local-fs.target
+Requires=my-bot-network-ready.service
+After=local-fs.target my-bot-network-ready.service
 StartLimitIntervalSec=0
 ConditionPathExists=@ROBOT_WORKSPACE@/install/setup.bash
 

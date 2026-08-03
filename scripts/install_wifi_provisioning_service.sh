@@ -4,9 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SERVICE_NAME="my-bot-wifi-provisioning.service"
+NETWORK_SERVICE_NAME="my-bot-network-ready.service"
 TEMPLATE_PATH="${PACKAGE_DIR}/systemd/${SERVICE_NAME}.in"
+NETWORK_TEMPLATE_PATH="${PACKAGE_DIR}/systemd/${NETWORK_SERVICE_NAME}.in"
 DEFAULTS_TEMPLATE="${PACKAGE_DIR}/systemd/my-bot-wifi-provisioning.default"
 SYSTEMD_PATH="/etc/systemd/system/${SERVICE_NAME}"
+NETWORK_SYSTEMD_PATH="/etc/systemd/system/${NETWORK_SERVICE_NAME}"
 DEFAULTS_PATH="/etc/default/my-bot-wifi-provisioning"
 DRY_RUN=false
 ENABLE_SERVICE=false
@@ -16,10 +19,11 @@ usage() {
 Usage: install_wifi_provisioning_service.sh [--dry-run] [--enable]
 
   --dry-run  Validate and print the rendered unit without changing the system.
-  --enable   Explicitly enable and start the provisioning UI after installation.
+  --enable   Enable and start the Wi-Fi gate and provisioning UI.
 
-Without --enable, the unit and defaults are installed but remain disabled and
-stopped. This installer never creates or activates a Wi-Fi access point.
+Without --enable, the units and defaults are installed but remain disabled and
+stopped. This installer never creates the access-point profile; when enabled,
+the gate may activate an already-installed profile.
 EOF
 }
 
@@ -51,7 +55,9 @@ fi
 
 for required_path in \
   "${TEMPLATE_PATH}" \
+  "${NETWORK_TEMPLATE_PATH}" \
   "${DEFAULTS_TEMPLATE}" \
+  "${PACKAGE_DIR}/scripts/wifi_startup.py" \
   "${PACKAGE_DIR}/scripts/wifi_provisioning_server.py" \
   "${PACKAGE_DIR}/wifi_provisioning_ui/index.html" \
   "${PACKAGE_DIR}/wifi_provisioning_ui/app.js" \
@@ -87,27 +93,33 @@ if [[ "$(systemctl is-active NetworkManager 2>/dev/null || true)" != "active" ]]
 fi
 
 tmp_unit="$(mktemp)"
-trap 'rm -f "${tmp_unit}"' EXIT
+tmp_network_unit="$(mktemp)"
+trap 'rm -f "${tmp_unit}" "${tmp_network_unit}"' EXIT
 sed \
   -e "s|@ROBOT_PACKAGE_DIR@|${PACKAGE_DIR}|g" \
   "${TEMPLATE_PATH}" >"${tmp_unit}"
+sed \
+  -e "s|@ROBOT_PACKAGE_DIR@|${PACKAGE_DIR}|g" \
+  "${NETWORK_TEMPLATE_PATH}" >"${tmp_network_unit}"
 
-if grep -q '@ROBOT_PACKAGE_DIR@' "${tmp_unit}"; then
-  echo "Rendered provisioning unit contains an unresolved package path." >&2
+if grep -q '@ROBOT_PACKAGE_DIR@' "${tmp_unit}" "${tmp_network_unit}"; then
+  echo "Rendered Wi-Fi unit contains an unresolved package path." >&2
   exit 1
 fi
-if grep -q 'WantedBy=my-bot-robot' "${tmp_unit}"; then
-  echo "Provisioning must remain independent from the robot ROS service." >&2
+if ! grep -q '^Before=.*my-bot-robot.service' "${tmp_network_unit}"; then
+  echo "Rendered network gate does not run before the robot service." >&2
   exit 1
 fi
 
 if [[ "${DRY_RUN}" == true ]]; then
   echo "Dry run successful. No network or system settings were changed."
+  sed -n '1,240p' "${tmp_network_unit}"
   sed -n '1,240p' "${tmp_unit}"
   exit 0
 fi
 
 echo "Installing ${SERVICE_NAME}..."
+sudo install -m 0644 "${tmp_network_unit}" "${NETWORK_SYSTEMD_PATH}"
 sudo install -m 0644 "${tmp_unit}" "${SYSTEMD_PATH}"
 if [[ ! -e "${DEFAULTS_PATH}" ]]; then
   sudo install -m 0644 "${DEFAULTS_TEMPLATE}" "${DEFAULTS_PATH}"
@@ -118,22 +130,27 @@ fi
 sudo systemctl daemon-reload
 
 if [[ "${ENABLE_SERVICE}" == true ]]; then
-  sudo systemctl enable --now "${SERVICE_NAME}"
-  action="installed, enabled, and started"
+  sudo systemctl enable "${NETWORK_SERVICE_NAME}" "${SERVICE_NAME}"
+  sudo systemctl restart "${NETWORK_SERVICE_NAME}"
+  sudo systemctl restart "${SERVICE_NAME}"
+  action="installed, enabled, and started after Wi-Fi became ready"
 else
+  sudo systemctl disable --now "${NETWORK_SERVICE_NAME}" >/dev/null 2>&1 || true
   sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
-  action="installed but left disabled and stopped"
+  action="installed with its startup gate but left disabled and stopped"
 fi
 
 cat <<EOF
 
 Wi-Fi provisioning service ${action}.
 
-The current Wi-Fi connection and every NetworkManager profile were left
-unchanged. Once the IntelliTrolley AP is active, open:
+When enabled, the startup gate uses a saved client Wi-Fi first and starts the
+IntelliTrolley AP only when no saved client profile connects. Once the AP is
+active, open:
   http://10.42.0.1:8090/
 
 Status:
+  sudo systemctl status ${NETWORK_SERVICE_NAME} --no-pager
   sudo systemctl status ${SERVICE_NAME} --no-pager
 
 Logs:

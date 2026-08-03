@@ -1,8 +1,8 @@
 [Unit]
 Description=IntelliTrolley recovery Wi-Fi provisioning
 Documentation=file://@ROBOT_PACKAGE_DIR@/docs/WIFI_AP_PHASE2.md
-After=NetworkManager.service local-fs.target
-Wants=NetworkManager.service
+Requires=my-bot-network-ready.service
+After=my-bot-network-ready.service local-fs.target
 ConditionPathExists=/usr/bin/nmcli
 ConditionPathExists=@ROBOT_PACKAGE_DIR@/wifi_provisioning_ui/index.html
 

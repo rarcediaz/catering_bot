@@ -11,6 +11,8 @@ const elements = {
   facilityMessage: document.getElementById("facility-message"),
   scanButton: document.getElementById("scan-button"),
   networkOptions: document.getElementById("network-options"),
+  networkResultsField: document.getElementById("network-results-field"),
+  networkResults: document.getElementById("network-results"),
   ssid: document.getElementById("ssid"),
   security: document.getElementById("security"),
   passwordField: document.getElementById("password-field"),
@@ -56,6 +58,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   elements.useApButton.addEventListener("click", useCurrentHotspot);
   elements.scanButton.addEventListener("click", scanNetworks);
+  elements.networkResults.addEventListener("change", selectScannedNetwork);
   elements.security.addEventListener("change", syncSecurity);
   elements.showPassword.addEventListener("click", togglePassword);
   elements.robotStationary.addEventListener("change", () => {
@@ -175,13 +178,24 @@ async function scanNetworks() {
   try {
     const body = await api("/api/networks", { method: "GET", headers: {} });
     elements.networkOptions.innerHTML = "";
+    elements.networkResults.innerHTML = "";
     for (const network of body.networks || []) {
       const option = document.createElement("option");
       option.value = network.ssid;
       option.label = `${network.signal}% · ${network.security_label}`;
       option.dataset.security = network.security;
       elements.networkOptions.appendChild(option);
+
+      const visibleOption = document.createElement("option");
+      visibleOption.value = network.ssid;
+      visibleOption.textContent = `${network.ssid} — ${network.signal}% — ${network.security_label}`;
+      visibleOption.dataset.security = network.security;
+      elements.networkResults.appendChild(visibleOption);
     }
+    elements.networkResultsField.classList.toggle(
+      "hidden",
+      !body.networks?.length,
+    );
     setMessage(
       elements.facilityMessage,
       body.networks?.length
@@ -198,6 +212,25 @@ async function scanNetworks() {
   } finally {
     elements.scanButton.disabled = !state.status?.can_provision;
   }
+}
+
+function selectScannedNetwork() {
+  const option = elements.networkResults.selectedOptions[0];
+  if (!option) {
+    return;
+  }
+  elements.ssid.value = option.value;
+  if (option.dataset.security === "enterprise") {
+    setMessage(
+      elements.facilityMessage,
+      `${option.value} uses Enterprise authentication and cannot be provisioned here.`,
+      true,
+    );
+    return;
+  }
+  elements.security.value = option.dataset.security === "open" ? "open" : "wpa-psk";
+  syncSecurity();
+  setMessage(elements.facilityMessage, `Selected ${option.value}.`, false);
 }
 
 async function stageFacilityNetwork(event) {
@@ -248,19 +281,25 @@ async function activateFacilityNetwork() {
     elements.pendingCard.classList.remove("hidden");
     elements.switchCard.classList.add("hidden");
     setMessage(elements.switchMessage, body.message, false);
-    startCountdown(body.deadline);
+    startCountdown(body.timeout_s);
   } catch (error) {
     setMessage(elements.switchMessage, error.message || "Network switch failed.", true);
     elements.switchButton.disabled = !elements.robotStationary.checked;
   }
 }
 
-function startCountdown(deadlineSeconds) {
+function startCountdown(timeoutSeconds) {
   if (state.countdownTimer !== null) {
     window.clearInterval(state.countdownTimer);
   }
+  // The Pi and this computer may have different wall clocks. Measure the
+  // returned duration entirely on this browser's clock.
+  const deadlineMilliseconds = Date.now() + timeoutSeconds * 1000;
   const render = () => {
-    const remaining = Math.max(0, Math.ceil(deadlineSeconds - Date.now() / 1000));
+    const remaining = Math.max(
+      0,
+      Math.ceil((deadlineMilliseconds - Date.now()) / 1000),
+    );
     elements.rollbackCountdown.textContent = remaining > 0
       ? `Automatic rollback in ${remaining} seconds if not confirmed.`
       : "Confirmation expired. Reconnect to the IntelliTrolley hotspot.";

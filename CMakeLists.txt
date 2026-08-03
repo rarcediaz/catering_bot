@@ -39,6 +39,14 @@ if(BUILD_TESTING)
     safety_logic_test
     test/test_safety_logic.py
   )
+  ament_add_pytest_test(
+    wifi_startup_test
+    test/test_wifi_startup.py
+  )
+  ament_add_pytest_test(
+    wifi_provisioning_test
+    test/test_wifi_provisioning.py
+  )
 endif()
 
 install(
@@ -58,7 +66,9 @@ install(
     scripts/generate_cyclonedds_config.py
     scripts/generate_wifi_ap_config.sh
     scripts/install_wifi_provisioning_service.sh
+    scripts/preview_wifi_provisioning_ui.py
     scripts/start_robot_stack.sh
+    scripts/wifi_startup.py
     scripts/wifi_provisioning_server.py
   DESTINATION lib/${PROJECT_NAME}
 )

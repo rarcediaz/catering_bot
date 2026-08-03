@@ -166,7 +166,7 @@ controller_server:
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       # Match model_dt to the 10 Hz controller period. Twenty samples give a
-      # two-second horizon: 1.40 m at maximum speed, which keeps the trolley's
+      # two-second horizon: 1.00 m at maximum speed, which keeps the trolley's
       # 0.917 m forward overhang inside the 2.50 m local-costmap half-width.
       time_steps: 20
       model_dt: 0.10
@@ -174,11 +174,13 @@ controller_server:
       iteration_count: 1
       # Explore decisive translation and rotation without allowing sampled
       # commands beyond the physical navigation envelope.
-      vx_std: 0.35
+      vx_std: 0.25
       vy_std: 0.0
       wz_std: 0.50
-      vx_max: 0.70
-      vx_min: -0.70
+      # Keep autonomous travel below the 0.70 m/s hardware ceiling so the
+      # front lidar gets more scans of thin chair legs before contact.
+      vx_max: 0.50
+      vx_min: -0.50
       vy_max: 0.0
       wz_max: 0.80
       temperature: 0.3
@@ -194,11 +196,11 @@ controller_server:
       # the robot Wi-Fi link. Absorb those without weakening the Pi's
       # independent command deadman or its fresh-lidar motion constraints.
       transform_tolerance: 0.70
-      # There is deliberately no PreferForwardCritic: a route behind the axle
-      # should be driven in reverse instead of forcing an open-space U-turn.
-      # There is also no GoalAngleCritic, because catering stops are positions
-      # and must not trigger a final heading spin.
-      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic"]
+      # Prefer the front-lidar-covered direction for normal route travel while
+      # retaining finite-cost reverse as a short escape/repositioning option.
+      # There is no GoalAngleCritic because catering stops are positions and
+      # must not trigger a final heading spin.
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
       ConstraintCritic:
         enabled: true
         cost_power: 1
@@ -245,6 +247,15 @@ controller_server:
         # Humble's bidirectional mode compares forward and mirrored headings,
         # allowing MPPI to select the shorter collision-checked direction.
         forward_preference: false
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        # This is a preference, not a prohibition: a collision-checked reverse
+        # can still win when every forward rollout is blocked or substantially
+        # worse. Stop applying the preference near the positional goal so a
+        # short final correction does not create an unnecessary turnaround.
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
 
 local_costmap:
   local_costmap:
@@ -326,7 +337,7 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      filters: ["keepout_filter", "keepout_inflation_layer"]
+      filters: ["keepout_filter", "keepout_inflation_layer", "preferred_filter"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -358,6 +369,13 @@ global_costmap:
         # not route the robot center along an uninflated keepout boundary.
         cost_scaling_factor: 4.0
         inflation_radius: 0.60
+      preferred_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        # This second type-0 mask is global-only. White preferred corridors add
+        # no cost, while light-gray alternatives remain traversable but lose
+        # to the preferred route when path lengths are otherwise comparable.
+        filter_info_topic: "/preferred_costmap_filter_info"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Use the same clearance model as local control and Pi side safety so
@@ -460,8 +478,8 @@ velocity_smoother:
     # from the previous smoothed command; the Pi safety node and diff-drive
     # controller still enforce local stopping and hardware limits.
     feedback: "OPEN_LOOP"
-    max_velocity: [0.70, 0.0, 0.80]
-    min_velocity: [-0.70, 0.0, -0.80]
+    max_velocity: [0.50, 0.0, 0.80]
+    min_velocity: [-0.50, 0.0, -0.80]
     max_accel: [0.35, 0.0, 1.50]
     max_decel: [-2.00, 0.0, -1.80]
     odom_topic: "/diff_cont/odom"

@@ -20,6 +20,12 @@ def test_systemd_selects_only_production_hardware_launch():
     assert 'rpi_autonomy.launch.py' not in unit
     assert 'ROBOT_LAUNCH_FILE}" != "rpi_robot.launch.py"' in wrapper
     assert 'network-online.target' not in unit
+    assert 'Requires=my-bot-network-ready.service' in unit
+    assert 'Wants=my-bot-robot.service' in read(
+        'systemd/my-bot-network-ready.service.in'
+    )
+    assert 'assert_wifi_ready' in wrapper
+    assert 'ROBOT_CYCLONEDDS_INTERFACE=wlan0' in defaults
     assert 'ROBOT_INITIAL_CLEAN_START=once' in defaults
     assert 'perform_initial_clean_start' in wrapper
     assert 'initial-clean-start-complete' in wrapper
@@ -186,10 +192,10 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
         re.search(r'linear\.x\.min_velocity:\s*(-[0-9.]+)', controllers).group(1)
     )
 
-    assert max_vel_x == 0.70
-    assert smoother_max == 0.70
+    assert max_vel_x == 0.50
+    assert smoother_max == 0.50
     assert hardware_max >= smoother_max
-    assert smoother_min == -0.70
+    assert smoother_min == -0.50
     assert hardware_min <= smoother_min
     assert 'feedback: "OPEN_LOOP"' in nav2
 
@@ -236,7 +242,7 @@ def test_rotation_counts_as_navigation_progress():
     assert re.search(r'movement_time_allowance:\s*30\.0\b', nav2)
 
 
-def test_mppi_chooses_forward_or_reverse_without_heading_spin():
+def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     nav2 = read('config/nav2_params.yaml')
     controller_hz = float(
         re.search(r'controller_frequency:\s*([0-9.]+)', nav2).group(1)
@@ -265,14 +271,21 @@ def test_mppi_chooses_forward_or_reverse_without_heading_spin():
     assert 'RotationShimController' not in nav2
     assert re.search(
         r'critics:\s*\["ConstraintCritic", "CostCritic", "GoalCritic", '
-        r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic"\]',
+        r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic", '
+        r'"PreferForwardCritic"\]',
         nav2,
     )
-    assert not re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
+    assert re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
+    assert re.search(
+        r'PreferForwardCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
+        r'(?:#.*\s*)*cost_weight:\s*5\.0\s*'
+        r'threshold_to_consider:\s*0\.5',
+        nav2,
+    )
     assert not re.search(r'^\s+GoalAngleCritic:', nav2, re.MULTILINE)
     assert not re.search(r'^\s+TwirlingCritic:', nav2, re.MULTILINE)
     assert re.search(r'motion_model:\s*"DiffDrive"', nav2)
-    assert re.search(r'vx_min:\s*-0\.70\b', nav2)
+    assert re.search(r'vx_min:\s*-0\.50\b', nav2)
     assert re.search(r'forward_preference:\s*false\b', nav2)
     assert re.search(r'use_path_orientations:\s*false\b', nav2)
     assert controller_hz == 10.0
@@ -324,12 +337,33 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
     assert inflation_scales == [4.0, 4.0, 4.0, 4.0]
     assert nav2.count(
         'filters: ["keepout_filter", "keepout_inflation_layer"]'
-    ) == 2
+    ) == 1
+    assert nav2.count(
+        'filters: ["keepout_filter", "keepout_inflation_layer", '
+        '"preferred_filter"]'
+    ) == 1
     assert nav2.count(
         'keepout_inflation_layer:\n'
         '        plugin: "nav2_costmap_2d::InflationLayer"'
     ) == 2
     assert abs(inflation_radii[0] - (side_start + side_clearance)) <= 0.01
+
+
+def test_preferred_route_mask_is_a_separate_global_soft_cost_filter():
+    nav2 = read('config/nav2_params.yaml')
+    nav2_launch = read('launch/nav2.launch.py')
+    central_launch = read('launch/central_compute.launch.py')
+    preferred_yaml = read('maps/atrium_preferred.yaml')
+
+    assert nav2.count('preferred_filter:') == 1
+    assert 'filter_info_topic: "/preferred_costmap_filter_info"' in nav2
+    assert "name='preferred_mask_server'" in nav2_launch
+    assert "'topic_name': 'preferred_filter_mask'" in nav2_launch
+    assert "'mask_topic': '/preferred_filter_mask'" in nav2_launch
+    assert "'use_preferred': use_preferred" in central_launch
+    assert "'maps', 'atrium_preferred.yaml'" in central_launch
+    assert re.search(r'mode:\s*scale\b', preferred_yaml)
+    assert re.search(r'resolution:\s*0\.05\b', preferred_yaml)
 
 
 def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
@@ -353,10 +387,10 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     )
 
     assert re.search(r'controller_frequency:\s*10\.0\b', nav2)
-    assert re.search(r'vx_min:\s*-0\.70\b', nav2)
+    assert re.search(r'vx_min:\s*-0\.50\b', nav2)
     assert re.search(r'transform_tolerance:\s*0\.70\b', nav2)
     assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
-    assert re.search(r'min_velocity:\s*\[-0\.70,\s*0\.0,\s*-0\.80\]', nav2)
+    assert re.search(r'min_velocity:\s*\[-0\.50,\s*0\.0,\s*-0\.80\]', nav2)
     assert '<RateController hz="0.2">' in behavior_tree
     backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
     spin = '<Spin spin_dist="1.57"/>'
@@ -396,7 +430,7 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     assert 'speed_ratio' not in get_stop
     assert 'def get_clearance_speed_scale' in safety
     assert 'def get_side_turn_scale' in safety
-    assert "declare_parameter('side_hard_stop_distance_m', 0.03)" in safety
+    assert "declare_parameter('side_hard_stop_distance_m', 0.08)" in safety
     assert "declare_parameter('side_min_speed_scale', 0.25)" in safety
     assert "return 'left_turn_slowdown'" in safety
     assert "return 'right_turn_slowdown'" in safety
@@ -417,7 +451,11 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     assert 'Navigation safety constraint active:' in safety
     for launch in launches:
         assert re.search(
-            r"'obstacle_stop_distance_m',\s*default_value='0\.20'",
+            r"'obstacle_stop_distance_m',\s*default_value='0\.25'",
+            launch,
+        )
+        assert re.search(
+            r"'side_hard_stop_distance_m',\s*default_value='0\.08'",
             launch,
         )
 

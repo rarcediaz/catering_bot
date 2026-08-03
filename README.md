@@ -89,26 +89,29 @@ serial-device owners, then records a marker under
 `~/.local/state/my-bot/`. Later starts rely on the wrapper lock, launch lock,
 and explicit device-owner checks instead of repeatedly killing processes.
 
-The wrapper waits for both devices without treating Wi-Fi or DDS discovery as
-a startup dependency. Shutdown publishes a best-effort zero safety command
+The wrapper starts only after the Wi-Fi gate has selected a saved network or
+the recovery AP, and independently verifies that `wlan0` has IPv4. It then
+waits for both devices. Shutdown publishes a best-effort zero safety command
 before terminating the launch process group; controller and firmware timeouts
 remain the independent backstops.
 
 ## How Wi-Fi relates to the robot stack
 
-Wi-Fi is not a ROS node and is not started by `rpi_robot.launch.py`. The
-recovery AP and its separate provisioning service must be installed and
-enabled explicitly. NetworkManager then owns AP/facility selection during Pi
-boot, while the ROS hardware service starts independently and may be running
-before Wi-Fi is ready.
+Wi-Fi is not a ROS node and is not started by `rpi_robot.launch.py`.
+NetworkManager owns the connections, while `my-bot-network-ready.service`
+tries saved Wi-Fi first and starts the recovery AP if none connects. The ROS
+hardware service requires this gate and binds Cyclone DDS to `wlan0`.
 
 From the AP, `http://10.42.0.1:8090/` can save a facility profile without
 switching. A later switch uses a NetworkManager checkpoint and automatically
 restores the AP unless the new network is confirmed from the Windows central
-computer. The same page can instead keep the AP permanently and update the Pi
-and Windows DDS peers for `10.42.0.0/24` without switching Wi-Fi. A Wi-Fi
-failure removes remote commands but does not stop the local lidar, safety,
-controller, or firmware watchdogs. See
+computer. The AP can be used permanently without making a UI selection; once
+the gate assigns its IPv4 address, it starts the robot service automatically.
+The same page can optionally update the Pi and Windows DDS peers for
+`10.42.0.0/24` without switching Wi-Fi. A UI-driven network switch stops ROS,
+changes and verifies the Wi-Fi, then starts ROS on the new address. A rollback
+repeats that stop/switch/start sequence when restoring the AP. A transient
+Wi-Fi failure removes remote commands and local safety timeouts stop motion. See
 [the provisioning flow](docs/WIFI_AP_PHASE2.md).
 
 Never run `launch_robot.launch.py` directly in production. It is an internal

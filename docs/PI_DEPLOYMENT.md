@@ -54,13 +54,21 @@ actual attributes and USB port path.
 
 ## 3. Render and install the service
 
+First install the reviewed recovery AP profile as described in
+[the Wi-Fi provisioning flow](WIFI_AP_PHASE2.md), then install the services:
+
 ```bash
 cd /path/to/robot_ws
 source install/setup.bash
+./src/my_bot/scripts/install_wifi_provisioning_service.sh --dry-run
+./src/my_bot/scripts/install_wifi_provisioning_service.sh --enable
 ./src/my_bot/scripts/install_robot_service.sh --dry-run
 ./src/my_bot/scripts/install_robot_service.sh --no-start
 sudoedit /etc/default/my-bot-robot
 ```
+
+The robot installer refuses a real installation when the network-ready unit
+is absent.
 
 Set at least:
 
@@ -79,9 +87,9 @@ sudo systemctl status my-bot-robot.service --no-pager
 sudo journalctl -u my-bot-robot.service -f -o cat
 ```
 
-The unit selects `rpi_robot.launch.py`. It starts without a network dependency,
-waits for both serial devices, and rejects duplicate wrappers or pre-existing
-device owners.
+The unit selects `rpi_robot.launch.py`. It requires
+`my-bot-network-ready.service`, checks that `wlan0` has IPv4, waits for both
+serial devices, and rejects duplicate wrappers or pre-existing device owners.
 
 On the first managed start, the wrapper performs a targeted clean-slate sweep
 of stale `my_bot`, hardware-driver, controller, and central-autonomy processes
@@ -148,8 +156,8 @@ Do not claim acceptance until these physical tests pass.
 ## 6. Reboot and central-disconnection test
 
 1. Reboot the Pi with the central computer powered off.
-2. Confirm the service starts the local hardware stack without waiting for
-   Wi-Fi or a central ROS graph.
+2. Confirm `my-bot-network-ready.service` selects a saved Wi-Fi, or starts the
+   recovery AP when no saved Wi-Fi is reachable, before the robot service.
 3. Confirm the startup safety gate opens automatically after fresh scans and a
    quiet period, with the wheels stationary.
 4. Start the central computer and confirm discovery, scan, odometry, and TF.

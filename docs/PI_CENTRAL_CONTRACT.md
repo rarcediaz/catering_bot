@@ -90,7 +90,7 @@ hardware service.
 Side clearance is progressive: inside the 0.25 m body-edge envelope, the Pi
 scales a translating turn as one complete linear/angular command so it retains
 Nav2's collision-checked curvature. A pure turn scales its angular component.
-The Pi preserves a small 0.03 m hard-stop boundary for an imminent side-sweep
+The Pi preserves a 0.08 m hard-stop boundary for an imminent side-sweep
 collision. Turns away from the obstacle are not reduced, and the front/rear
 collision stops remain fail-closed.
 
@@ -99,7 +99,7 @@ when a translating arc must slow, the Pi applies the same scale to its linear
 and angular components. A hard front/rear stop therefore stops the entire arc
 instead of unexpectedly converting it into an in-place body sweep. Pure turns
 remain available subject to the independent left/right clearance envelopes.
-The hard front/rear boundary is fixed at 0.20 m from the configured body edge.
+The hard front/rear boundary is fixed at 0.25 m from the configured body edge.
 Between that boundary and the outer 0.75 m slowdown envelope, the Pi applies a
 continuous speed limit based on clearance. The hard boundary intentionally does
 not expand and contract with odometry, which avoids a stop/go feedback loop

@@ -11,6 +11,9 @@ ROBOT_WIFI_HOSTNAME=zrpi-desktop.local
 ROBOT_WIFI_PROVISION_BIND=0.0.0.0
 ROBOT_WIFI_PROVISION_PORT=8090
 ROBOT_WIFI_SWITCH_TIMEOUT_S=180
+# Total time spent trying saved client profiles before starting the hotspot.
+ROBOT_WIFI_CLIENT_WAIT_S=30
+ROBOT_WIFI_READY_STATE=/run/my-bot-network/ready.json
 ROBOT_WIFI_CONNECTIONS_DIR=/etc/NetworkManager/system-connections
 ROBOT_WIFI_STATE_DIR=/var/lib/my-bot-wifi-provisioning
 ROBOT_WIFI_ROBOT_DEFAULTS=/etc/default/my-bot-robot

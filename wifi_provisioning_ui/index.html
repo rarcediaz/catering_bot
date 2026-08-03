@@ -15,7 +15,8 @@
           <h1>IntelliTrolley Network Setup</h1>
           <p>
             Save a facility Wi-Fi connection without leaving the robot hotspot.
-            Nothing switches until you explicitly approve it.
+            The robot service already starts automatically on this hotspot;
+            nothing switches until you explicitly approve it.
           </p>
         </div>
       </header>
@@ -47,20 +48,20 @@
         <div class="card-heading">
           <div>
             <p class="step-label">Option A</p>
-            <h2>Keep the robot hotspot</h2>
+            <h2>Configure this computer for the robot hotspot</h2>
           </div>
         </div>
         <p>
-          Use <strong>IntelliTrolley</strong> as the permanent robot network.
-          This does not switch Wi-Fi. It updates the Pi’s ROS 2 peer to this
-          Windows computer and prepares the matching Windows settings.
+          This optional step is only for explicit ROS 2 peer and Windows
+          settings. The Pi and robot service already use
+          <strong>IntelliTrolley</strong> automatically; this does not switch Wi-Fi.
         </p>
         <label class="checkbox-row safety-check">
           <input id="ap-robot-stationary" type="checkbox" />
           <span>The robot is stationary and safe for a service restart.</span>
         </label>
         <button class="primary" id="use-ap-button" type="button" disabled>
-          Use this hotspot
+          Configure this computer
         </button>
         <p class="message" id="ap-message" role="status"></p>
       </section>
@@ -88,6 +89,11 @@
               required
             />
             <datalist id="network-options"></datalist>
+          </label>
+
+          <label class="hidden" id="network-results-field">
+            <span>Nearby networks — select one</span>
+            <select id="network-results" size="5"></select>
           </label>
 
           <label>
@@ -227,8 +233,8 @@
       </section>
 
       <footer>
-        Wi-Fi is managed by NetworkManager and remains separate from the ROS 2
-        hardware and safety service.
+        NetworkManager brings up saved Wi-Fi or this recovery hotspot before
+        the ROS 2 hardware and safety service starts.
       </footer>
     </main>
 
