@@ -146,6 +146,19 @@ EOF
   else
     echo "Preserved existing settings at ${DEFAULTS_PATH}."
   fi
+  if ! grep -q '^ROBOT_WIFI_CLIENT_WAIT_S=' "${tmp_defaults}"; then
+    cat >>"${tmp_defaults}" <<'EOF'
+
+# Give saved client profiles a full boot grace period before starting the AP.
+ROBOT_WIFI_CLIENT_WAIT_S=90
+EOF
+    sudo install -m 0644 "${tmp_defaults}" "${DEFAULTS_PATH}"
+    echo "Added the 90-second saved Wi-Fi boot grace."
+  elif grep -q '^ROBOT_WIFI_CLIENT_WAIT_S=30$' "${tmp_defaults}"; then
+    sed -i 's/^ROBOT_WIFI_CLIENT_WAIT_S=30$/ROBOT_WIFI_CLIENT_WAIT_S=90/' "${tmp_defaults}"
+    sudo install -m 0644 "${tmp_defaults}" "${DEFAULTS_PATH}"
+    echo "Updated the saved Wi-Fi boot grace from 30 to 90 seconds."
+  fi
 fi
 sudo systemctl daemon-reload
 

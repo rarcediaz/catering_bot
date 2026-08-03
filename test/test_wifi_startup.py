@@ -19,10 +19,11 @@ AP_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
 class FakeRunner(Runner):
-    def __init__(self, *, include_client: bool, active: str = ""):
+    def __init__(self, *, include_client: bool, active: str = "", failures: int = 0):
         self.include_client = include_client
         self.active = active
         self.address = "192.168.20.18/24" if active else ""
+        self.failures = failures
         self.commands = []
 
     def run(self, command, *, timeout=20.0, check=True):
@@ -50,6 +51,9 @@ class FakeRunner(Runner):
                 command, 0, json.dumps([{"addr_info": info}]), ""
             )
         if "up" in command and "uuid" in command:
+            if self.failures > 0:
+                self.failures -= 1
+                return subprocess.CompletedProcess(command, 10, "", "not available")
             self.active = "Facility:West"
             self.address = "192.168.20.18/24"
         elif "up" in command and "id" in command:
@@ -65,7 +69,7 @@ def make_startup(tmp_path, runner):
     return WifiStartup(
         interface="wlan0",
         ap_connection="intellitrolley-ap",
-        client_wait_s=30,
+        client_wait_s=90,
         state_file=tmp_path / "ready.json",
         runner=runner,
     )
@@ -92,6 +96,16 @@ def test_boot_uses_saved_wifi_before_access_point(tmp_path):
     assert state["connection"] == "Facility:West"
     assert state["address"] == "192.168.20.18/24"
     assert any("uuid" in command for command in runner.commands)
+    assert not any("id" in command and "up" in command for command in runner.commands)
+
+
+def test_boot_retries_saved_wifi_during_full_grace_period(tmp_path):
+    runner = FakeRunner(include_client=True, failures=1)
+    startup = make_startup(tmp_path, runner)
+
+    assert startup.run().startswith("Saved Wi-Fi ready")
+    attempts = [command for command in runner.commands if "uuid" in command and "up" in command]
+    assert len(attempts) == 2
     assert not any("id" in command and "up" in command for command in runner.commands)
 
 

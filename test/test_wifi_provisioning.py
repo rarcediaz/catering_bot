@@ -664,6 +664,7 @@ def test_provisioning_and_robot_services_are_gated_on_wifi_readiness():
     assert '--enable-next-boot' in installer
     assert 'if [[ "${ENABLE_SERVICE}" == true ]]' in installer
     assert "ROBOT_WIFI_LOSS_GRACE_S=90" in installer
+    assert "ROBOT_WIFI_CLIENT_WAIT_S=90" in installer
 
 
 def test_provisioning_ui_never_places_password_in_query_or_storage():

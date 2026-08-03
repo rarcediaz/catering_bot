@@ -13,6 +13,7 @@ import argparse
 from dataclasses import dataclass
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -258,17 +259,31 @@ class WifiStartup:
             )
 
         deadline = time.monotonic() + self.client_wait_s
-        for profile in profiles:
-            remaining = int(deadline - time.monotonic())
-            if remaining <= 0:
-                break
-            attempt_s = max(1, min(15, remaining))
-            print(f"Trying saved Wi-Fi profile {profile.name!r}...", flush=True)
-            if self.activate_profile(profile, attempt_s):
-                connection, address = self.ready(allow_ap=False)  # type: ignore[misc]
-                self.set_ap_autoconnect(False)
-                self.write_state("client", connection, address)
-                return f"Saved Wi-Fi ready: {connection} on {address}"
+        pass_number = 0
+        while profiles and time.monotonic() < deadline:
+            pass_number += 1
+            for profile in profiles:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                attempt_s = max(1, min(15, math.ceil(remaining)))
+                retry = f" (retry {pass_number})" if pass_number > 1 else ""
+                print(
+                    f"Trying saved Wi-Fi profile {profile.name!r}{retry}...",
+                    flush=True,
+                )
+                if self.activate_profile(profile, attempt_s):
+                    connection, address = self.ready(allow_ap=False)  # type: ignore[misc]
+                    self.set_ap_autoconnect(False)
+                    self.write_state("client", connection, address)
+                    return f"Saved Wi-Fi ready: {connection} on {address}"
+
+            # A profile can fail immediately when a mobile hotspot has not
+            # begun advertising yet. Avoid a tight nmcli retry loop while
+            # still giving it the full boot grace period to appear.
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(1.0, remaining))
 
         self.set_ap_autoconnect(True)
         result = self.runner.run(
@@ -310,7 +325,7 @@ def main() -> None:
     parser.add_argument(
         "--client-wait",
         type=int,
-        default=int(os.getenv("ROBOT_WIFI_CLIENT_WAIT_S", "30")),
+        default=int(os.getenv("ROBOT_WIFI_CLIENT_WAIT_S", "90")),
     )
     parser.add_argument(
         "--state-file",

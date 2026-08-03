@@ -227,8 +227,8 @@ to `IntelliTrolley`, and correct the facility settings.
 
 The recovery AP profile has autoconnect priority `50`. Confirmed facility
 profiles use priority `200`. The startup gate and runtime monitor hold the AP out of
-autoconnect while it tries saved client profiles for
-`ROBOT_WIFI_CLIENT_WAIT_S` (30 seconds by default). If none connects, it
+autoconnect while it retries saved client profiles for
+`ROBOT_WIFI_CLIENT_WAIT_S` (90 seconds by default). If none connects, it
 re-enables and activates the AP. With no saved client profiles, the AP starts
 immediately. Read the selected mode and address from:
 
