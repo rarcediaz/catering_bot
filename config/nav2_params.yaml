@@ -252,10 +252,11 @@ controller_server:
         cost_power: 1
         # This is a preference, not a prohibition: a collision-checked reverse
         # can still win when every forward rollout is blocked or substantially
-        # worse. Stop applying the preference near the positional goal so a
-        # short final correction does not create an unnecessary turnaround.
+        # worse. Apply it during route travel, then hand off to GoalCritic for
+        # the final 1.4 m. A robot already approaching in reverse can therefore
+        # keep reversing instead of turning around just before it arrives.
         cost_weight: 5.0
-        threshold_to_consider: 0.5
+        threshold_to_consider: 1.4
 
 local_costmap:
   local_costmap:

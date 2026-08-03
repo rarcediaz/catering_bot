@@ -279,7 +279,7 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     assert re.search(
         r'PreferForwardCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
         r'(?:#.*\s*)*cost_weight:\s*5\.0\s*'
-        r'threshold_to_consider:\s*0\.5',
+        r'threshold_to_consider:\s*1\.4',
         nav2,
     )
     assert not re.search(r'^\s+GoalAngleCritic:', nav2, re.MULTILINE)
@@ -288,6 +288,24 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     assert re.search(r'vx_min:\s*-0\.50\b', nav2)
     assert re.search(r'forward_preference:\s*false\b', nav2)
     assert re.search(r'use_path_orientations:\s*false\b', nav2)
+    goal_threshold = float(
+        re.search(
+            r'GoalCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
+            r'cost_weight:\s*5\.0\s*threshold_to_consider:\s*([0-9.]+)',
+            nav2,
+        ).group(1)
+    )
+    forward_threshold = float(
+        re.search(
+            r'PreferForwardCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
+            r'(?:#.*\s*)*cost_weight:\s*5\.0\s*'
+            r'threshold_to_consider:\s*([0-9.]+)',
+            nav2,
+        ).group(1)
+    )
+    # Route travel prefers the front-lidar direction. At the final-approach
+    # boundary, position convergence takes over without inducing a late flip.
+    assert forward_threshold == goal_threshold == 1.4
     assert controller_hz == 10.0
     assert model_dt == 1.0 / controller_hz
     # The predicted axle travel plus the front overhang remains inside the
