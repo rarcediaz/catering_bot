@@ -107,7 +107,7 @@ def test_boot_starts_access_point_when_no_saved_wifi_exists(tmp_path):
     assert any("id" in command and "up" in command for command in runner.commands)
 
 
-def test_already_connected_client_is_accepted_and_ap_fallback_is_enabled(tmp_path):
+def test_already_connected_client_is_accepted_and_ap_fallback_waits_for_watchdog(tmp_path):
     runner = FakeRunner(include_client=True, active="Facility:West")
     startup = make_startup(tmp_path, runner)
 
@@ -116,6 +116,6 @@ def test_already_connected_client_is_accepted_and_ap_fallback_is_enabled(tmp_pat
     assert any(
         command[:3] == ["nmcli", "connection", "modify"]
         and "connection.autoconnect" in command
-        and "yes" in command
+        and "no" in command
         for command in runner.commands
     )

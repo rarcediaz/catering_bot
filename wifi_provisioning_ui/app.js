@@ -20,9 +20,11 @@ const elements = {
   showPassword: document.getElementById("show-password"),
   hiddenNetwork: document.getElementById("hidden-network"),
   stageButton: document.getElementById("stage-button"),
+  savedProfilesCard: document.getElementById("saved-profiles-card"),
+  savedProfiles: document.getElementById("saved-profiles"),
+  profilesMessage: document.getElementById("profiles-message"),
   switchCard: document.getElementById("switch-card"),
   stagedSsid: document.getElementById("staged-ssid"),
-  forgetButton: document.getElementById("forget-button"),
   robotStationary: document.getElementById("robot-stationary"),
   switchButton: document.getElementById("switch-button"),
   switchMessage: document.getElementById("switch-message"),
@@ -65,7 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.switchButton.disabled = !elements.robotStationary.checked;
   });
   elements.switchButton.addEventListener("click", activateFacilityNetwork);
-  elements.forgetButton.addEventListener("click", forgetFacilityNetwork);
+  elements.savedProfiles.addEventListener("click", handleSavedProfileAction);
   elements.centralComputer.addEventListener("change", () => {
     elements.confirmButton.disabled = !elements.centralComputer.checked;
   });
@@ -123,6 +125,7 @@ function renderStatus() {
   if (staged) {
     elements.stagedSsid.textContent = staged.ssid;
   }
+  renderSavedProfiles(status.saved_profiles || [], status.can_provision);
 
   if (state.confirmationToken) {
     elements.confirmCard.classList.remove("hidden");
@@ -133,6 +136,92 @@ function renderStatus() {
 
   if (status.last_result && !state.confirmationToken) {
     setMessage(elements.facilityMessage, status.last_result, false);
+  }
+}
+
+function renderSavedProfiles(profiles, canProvision) {
+  elements.savedProfiles.innerHTML = "";
+  elements.savedProfilesCard.classList.toggle("hidden", !profiles.length);
+  for (const profile of profiles) {
+    const row = document.createElement("div");
+    row.className = "profile-row";
+
+    const summary = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = profile.ssid;
+    const status = document.createElement("span");
+    status.textContent = profile.active
+      ? "Active"
+      : profile.confirmed
+        ? "Confirmed · automatic"
+        : "Saved · not confirmed";
+    summary.append(name, status);
+
+    const actions = document.createElement("div");
+    actions.className = "profile-actions";
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "secondary compact";
+    selectButton.textContent = profile.staged ? "Selected" : "Select";
+    selectButton.dataset.action = "select";
+    selectButton.dataset.uuid = profile.uuid;
+    selectButton.disabled = !canProvision || profile.active || profile.staged;
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "text-button compact";
+    removeButton.textContent = "Remove";
+    removeButton.dataset.action = "remove";
+    removeButton.dataset.uuid = profile.uuid;
+    removeButton.dataset.ssid = profile.ssid;
+    removeButton.disabled = !canProvision || profile.active;
+    actions.append(selectButton, removeButton);
+    row.append(summary, actions);
+    elements.savedProfiles.appendChild(row);
+  }
+}
+
+async function handleSavedProfileAction(event) {
+  const button = event.target.closest("button[data-action]");
+  if (!button || button.disabled) {
+    return;
+  }
+  const profileUuid = button.dataset.uuid || "";
+  if (button.dataset.action === "select") {
+    await selectSavedProfile(profileUuid);
+  } else if (button.dataset.action === "remove") {
+    await removeSavedProfile(profileUuid, button.dataset.ssid || "this network");
+  }
+}
+
+async function selectSavedProfile(profileUuid) {
+  setMessage(elements.profilesMessage, "Selecting saved profile…", false);
+  try {
+    const body = await api("/api/select", {
+      method: "POST",
+      body: JSON.stringify({ uuid: profileUuid }),
+    });
+    setMessage(elements.profilesMessage, body.message, false);
+    await refreshStatus();
+  } catch (error) {
+    setMessage(elements.profilesMessage, error.message || "Could not select profile.", true);
+  }
+}
+
+async function removeSavedProfile(profileUuid, ssid) {
+  if (!window.confirm(`Remove the saved Wi-Fi profile for ${ssid}?`)) {
+    return;
+  }
+  setMessage(elements.profilesMessage, `Removing ${ssid}…`, false);
+  try {
+    const body = await api("/api/forget", {
+      method: "POST",
+      body: JSON.stringify({ uuid: profileUuid, confirm: true }),
+    });
+    setMessage(elements.profilesMessage, body.message, false);
+    await refreshStatus();
+  } catch (error) {
+    setMessage(elements.profilesMessage, error.message || "Could not remove profile.", true);
   }
 }
 
@@ -310,25 +399,6 @@ function startCountdown(timeoutSeconds) {
   };
   render();
   state.countdownTimer = window.setInterval(render, 1000);
-}
-
-async function forgetFacilityNetwork() {
-  if (!window.confirm("Forget the saved facility Wi-Fi profile?")) {
-    return;
-  }
-  elements.forgetButton.disabled = true;
-  try {
-    const body = await api("/api/forget", {
-      method: "POST",
-      body: JSON.stringify({ confirm: true }),
-    });
-    setMessage(elements.facilityMessage, body.message, false);
-    await refreshStatus();
-  } catch (error) {
-    setMessage(elements.switchMessage, error.message || "Could not forget profile.", true);
-  } finally {
-    elements.forgetButton.disabled = false;
-  }
 }
 
 async function confirmFacilityNetwork() {

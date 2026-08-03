@@ -38,6 +38,7 @@ SUPPORTED_SECURITY = {"wpa-psk", "open"}
 CONNECTION_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
 CHECKPOINT_ROLLBACK_GRACE_S = 30
+RECOVERY_MONITOR_INTERVAL_S = 2.0
 
 
 class ProvisioningError(RuntimeError):
@@ -216,6 +217,39 @@ def parse_nmcli_networks(output: str) -> List[Dict[str, Any]]:
     )
 
 
+def parse_saved_profile_rows(
+    output: str,
+    ap_connection: str,
+) -> List[Dict[str, Any]]:
+    """Return saved client Wi-Fi profiles, including pre-existing Pi profiles."""
+    profiles: List[Dict[str, Any]] = []
+    for line in output.splitlines():
+        fields = split_nmcli_terse(line)
+        if len(fields) != 5:
+            continue
+        connection_name, profile_uuid, connection_type, autoconnect, device = fields
+        if (
+            connection_name == ap_connection
+            or connection_type not in {"wifi", "802-11-wireless"}
+            or not re.fullmatch(
+                r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+                r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
+                profile_uuid,
+            )
+        ):
+            continue
+        profiles.append(
+            {
+                "connection": connection_name,
+                "uuid": profile_uuid.lower(),
+                "confirmed": autoconnect.lower() in {"yes", "true"},
+                "active": bool(device and device != "--"),
+                "managed": connection_name.startswith(FACILITY_CONNECTION_PREFIX),
+            }
+        )
+    return profiles
+
+
 def update_env_file(path: Path, replacements: Dict[str, str]) -> bool:
     if not path.exists():
         return False
@@ -296,6 +330,8 @@ class ProvisioningManager:
         hostname: str,
         port: int,
         switch_timeout_s: int,
+        loss_grace_s: int,
+        ready_state_path: Path,
         network_connections_dir: Path,
         state_dir: Path,
         robot_defaults_path: Path,
@@ -310,6 +346,8 @@ class ProvisioningManager:
         self.hostname = hostname
         self.port = int(port)
         self.switch_timeout_s = max(60, min(600, int(switch_timeout_s)))
+        self.loss_grace_s = max(30, min(600, int(loss_grace_s)))
+        self.ready_state_path = ready_state_path
         self.network_connections_dir = network_connections_dir
         self.state_dir = state_dir
         self.robot_defaults_path = robot_defaults_path
@@ -328,7 +366,13 @@ class ProvisioningManager:
         self.staged_connection = ""
         self.staged_ssid = ""
         self.staged_security = ""
+        self.loss_started_at = 0.0
+        self.pending_loss_started_at = 0.0
+        self.last_ready_signature: Optional[Tuple[str, str]] = None
+        self.recovery_stop = threading.Event()
+        self.recovery_thread: Optional[threading.Thread] = None
         self._load_state()
+        self._load_ready_signature()
 
     @property
     def state_path(self) -> Path:
@@ -350,6 +394,16 @@ class ProvisioningManager:
                 "A previous switch was interrupted. NetworkManager will restore "
                 "the previous connection through its checkpoint."
             )
+
+    def _load_ready_signature(self) -> None:
+        try:
+            payload = json.loads(self.ready_state_path.read_text(encoding="utf-8"))
+            connection = str(payload.get("connection") or "")
+            address = str(payload.get("address") or "")
+        except (FileNotFoundError, ValueError, OSError):
+            return
+        if connection and address:
+            self.last_ready_signature = (connection, address)
 
     def _save_state(self, phase: str) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -428,6 +482,50 @@ class ProvisioningManager:
         except ProvisioningError:
             return False
 
+    def saved_profiles(self) -> List[Dict[str, Any]]:
+        result = self.runner.run(
+            [
+                "nmcli",
+                "--terse",
+                "--escape",
+                "yes",
+                "--fields",
+                "NAME,UUID,TYPE,AUTOCONNECT,DEVICE",
+                "connection",
+                "show",
+            ],
+            timeout=10,
+        )
+        profiles = parse_saved_profile_rows(result.stdout, self.ap_connection)
+        for profile in profiles:
+            ssid_result = self.runner.run(
+                [
+                    "nmcli",
+                    "--get-values",
+                    "802-11-wireless.ssid",
+                    "connection",
+                    "show",
+                    "uuid",
+                    profile["uuid"],
+                ],
+                timeout=10,
+                check=False,
+            )
+            profile["ssid"] = (
+                ssid_result.stdout.strip()
+                if ssid_result.returncode == 0 and ssid_result.stdout.strip()
+                else profile["connection"]
+            )
+            profile["staged"] = profile["connection"] == self.staged_connection
+        return sorted(
+            profiles,
+            key=lambda item: (
+                not bool(item["active"]),
+                not bool(item["confirmed"]),
+                str(item["ssid"]).lower(),
+            ),
+        )
+
     def status(self, remote_address: str) -> Dict[str, Any]:
         try:
             active_connection = self.active_connection()
@@ -437,6 +535,10 @@ class ProvisioningManager:
             interface_address = self.interface_ipv4()
         except ProvisioningError:
             interface_address = None
+        try:
+            saved_profiles = self.saved_profiles()
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            saved_profiles = []
         with self.lock:
             remaining_s = max(0.0, self.pending_deadline - time.monotonic())
             pending = bool(
@@ -469,6 +571,8 @@ class ProvisioningManager:
                     else None
                 ),
                 "last_result": self.last_result,
+                "saved_profiles": saved_profiles,
+                "loss_grace_s": self.loss_grace_s,
                 "hostname": self.hostname,
                 "port": self.port,
             }
@@ -613,7 +717,7 @@ class ProvisioningManager:
             "timeout_s": self.switch_timeout_s,
             "confirm_url": confirm_url,
             "message": (
-                "Connect the Windows central computer to the facility Wi-Fi, "
+                "Connect this computer to the facility Wi-Fi, "
                 "then open the confirmation link before the deadline."
             ),
         }
@@ -635,11 +739,12 @@ class ProvisioningManager:
             with self.lock:
                 self.pending_robot_was_active = robot_was_active
                 self._save_state("pending")
-            self.runner.run(
+            activation_deadline = time.monotonic() + self.loss_grace_s
+            activation_result = self.runner.run(
                 [
                     "nmcli",
                     "--wait",
-                    "45",
+                    str(self.loss_grace_s),
                     "connection",
                     "up",
                     "id",
@@ -647,19 +752,28 @@ class ProvisioningManager:
                     "ifname",
                     self.interface,
                 ],
-                timeout=55,
+                timeout=self.loss_grace_s + 10,
+                check=False,
             )
-            if self.active_connection() != connection_name:
-                raise ProvisioningError(
-                    "Facility Wi-Fi activation returned without selecting the "
-                    "staged connection.",
-                    HTTPStatus.BAD_GATEWAY,
-                )
-            if self.interface_ipv4() is None:
-                raise ProvisioningError(
-                    "Facility Wi-Fi connected without receiving an IPv4 address.",
-                    HTTPStatus.BAD_GATEWAY,
-                )
+            while True:
+                if (
+                    self.active_connection() == connection_name
+                    and self.interface_ipv4() is not None
+                ):
+                    break
+                remaining_s = activation_deadline - time.monotonic()
+                if remaining_s <= 0.0:
+                    detail = (
+                        activation_result.stderr
+                        or activation_result.stdout
+                        or "the connection did not become ready"
+                    ).strip()
+                    raise ProvisioningError(
+                        f"Facility Wi-Fi did not recover within "
+                        f"{self.loss_grace_s} seconds: {detail}",
+                        HTTPStatus.BAD_GATEWAY,
+                    )
+                time.sleep(min(RECOVERY_MONITOR_INTERVAL_S, remaining_s))
         except (OSError, ProvisioningError, subprocess.TimeoutExpired) as exc:
             with self.lock:
                 checkpoint = self.pending_checkpoint
@@ -808,6 +922,186 @@ class ProvisioningManager:
         except (OSError, ProvisioningError, subprocess.TimeoutExpired):
             pass
 
+    def _set_ap_autoconnect(self, enabled: bool) -> None:
+        self.runner.run(
+            [
+                "nmcli",
+                "connection",
+                "modify",
+                self.ap_connection,
+                "connection.autoconnect",
+                "yes" if enabled else "no",
+                "connection.autoconnect-priority",
+                "50",
+            ],
+            timeout=10,
+        )
+
+    def _write_ready_state(
+        self,
+        mode: str,
+        connection: str,
+        address: ipaddress.IPv4Interface,
+    ) -> None:
+        self.ready_state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ready": True,
+            "mode": mode,
+            "interface": self.interface,
+            "connection": connection,
+            "address": str(address),
+            "timestamp": time.time(),
+        }
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{self.ready_state_path.name}.",
+            dir=str(self.ready_state_path.parent),
+            text=True,
+        )
+        try:
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_name, 0o644)
+            os.replace(temporary_name, self.ready_state_path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+
+    def check_runtime_recovery(self, *, now: Optional[float] = None) -> None:
+        """Apply the loss grace and recover to the AP after sustained failure."""
+        observed_at = time.monotonic() if now is None else float(now)
+        try:
+            connection = self.active_connection()
+            address = self.interface_ipv4()
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            connection = ""
+            address = None
+        ready = bool(connection and connection != "--" and address is not None)
+
+        with self.lock:
+            checkpoint = self.pending_checkpoint
+            pending_connection = self.pending_connection
+            pending_switch = bool(pending_connection and (checkpoint or self.switch_timer))
+
+            if pending_switch:
+                # The activation worker owns the initial attempt and its
+                # 90-second wait. Monitor sustained loss only after that worker
+                # has armed the confirmation rollback timer.
+                if self.rollback_timer is None:
+                    return
+                if ready and connection == pending_connection:
+                    self.pending_loss_started_at = 0.0
+                    return
+                if self.pending_loss_started_at <= 0.0:
+                    self.pending_loss_started_at = observed_at
+                    return
+                pending_lost_for = observed_at - self.pending_loss_started_at
+                should_rollback = bool(
+                    checkpoint and pending_lost_for >= self.loss_grace_s
+                )
+            else:
+                self.pending_loss_started_at = 0.0
+                should_rollback = False
+
+        if should_rollback:
+            self._checkpoint_expired(checkpoint)
+            return
+        if pending_switch:
+            return
+
+        if ready and address is not None:
+            mode = "ap" if connection == self.ap_connection else "client"
+            signature = (connection, str(address))
+            previous_signature = self.last_ready_signature
+            if mode == "client" and signature != previous_signature:
+                self._set_ap_autoconnect(False)
+            if signature != previous_signature:
+                self._write_ready_state(mode, connection, address)
+                self.last_ready_signature = signature
+                if previous_signature is not None:
+                    self._schedule_robot_service_refresh(
+                        ensure_running=True,
+                        delay_s=1.0,
+                    )
+            with self.lock:
+                self.loss_started_at = 0.0
+            return
+
+        with self.lock:
+            if self.loss_started_at <= 0.0:
+                self.loss_started_at = observed_at
+                self.last_result = (
+                    f"Wi-Fi lost; waiting {self.loss_grace_s} seconds for a saved "
+                    "connection before starting the recovery hotspot."
+                )
+                self._save_state("connection_grace")
+                return
+            lost_for = observed_at - self.loss_started_at
+            if lost_for < self.loss_grace_s:
+                return
+            self.loss_started_at = 0.0
+
+        try:
+            self._stop_robot_service_for_switch()
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            pass
+        try:
+            self._set_ap_autoconnect(True)
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            pass
+        self._ensure_recovery_ap()
+        try:
+            recovered_connection = self.active_connection()
+            recovered_address = self.interface_ipv4()
+        except (OSError, ProvisioningError, subprocess.TimeoutExpired):
+            recovered_connection = ""
+            recovered_address = None
+        if (
+            recovered_connection == self.ap_connection
+            and recovered_address is not None
+        ):
+            self._write_ready_state("ap", recovered_connection, recovered_address)
+            self.last_ready_signature = (
+                recovered_connection,
+                str(recovered_address),
+            )
+            with self.lock:
+                self.last_result = (
+                    f"No saved Wi-Fi recovered within {self.loss_grace_s} seconds; "
+                    "started the IntelliTrolley hotspot."
+                )
+                self._save_state("runtime_recovery")
+            self._schedule_robot_service_refresh(
+                ensure_running=True,
+                delay_s=1.0,
+            )
+
+    def start_recovery_monitor(self) -> None:
+        if self.recovery_thread is not None and self.recovery_thread.is_alive():
+            return
+        self.recovery_stop.clear()
+        self.recovery_thread = threading.Thread(
+            target=self._recovery_monitor_loop,
+            name="wifi-recovery-monitor",
+            daemon=True,
+        )
+        self.recovery_thread.start()
+
+    def stop_recovery_monitor(self) -> None:
+        self.recovery_stop.set()
+        if self.recovery_thread is not None:
+            self.recovery_thread.join(timeout=RECOVERY_MONITOR_INTERVAL_S + 1.0)
+        self.recovery_thread = None
+
+    def _recovery_monitor_loop(self) -> None:
+        while not self.recovery_stop.wait(RECOVERY_MONITOR_INTERVAL_S):
+            try:
+                self.check_runtime_recovery()
+            except Exception as exc:
+                print(f"Wi-Fi recovery monitor check failed: {exc}", flush=True)
+
     def _checkpoint_expired(self, checkpoint: str) -> None:
         with self.lock:
             self.rollback_timer = None
@@ -855,7 +1149,7 @@ class ProvisioningManager:
             or central_peer in self.ap_network.network
         ):
             raise ProvisioningError(
-                "Confirm from the Windows central computer on the facility network.",
+                "Confirm from this computer on the facility network.",
                 HTTPStatus.FORBIDDEN,
             )
 
@@ -906,7 +1200,7 @@ class ProvisioningManager:
                 "modify",
                 self.ap_connection,
                 "connection.autoconnect",
-                "yes",
+                "no",
                 "connection.autoconnect-priority",
                 "50",
             ],
@@ -960,6 +1254,9 @@ class ProvisioningManager:
             self.pending_token_hash = ""
             restart_robot = True
             self.pending_robot_was_active = False
+            self.staged_connection = ""
+            self.staged_ssid = ""
+            self.staged_security = ""
 
         handoff = self._apply_network_handoff(
             interface_address=interface_address,
@@ -969,7 +1266,7 @@ class ProvisioningManager:
         with self.lock:
             self.last_result = (
                 f"Confirmed {committed_ssid}; the Pi recovery hotspot remains "
-                "saved as an automatic fallback."
+                f"saved and will start after a {self.loss_grace_s}-second sustained loss."
             )
             self._save_state("committed")
 
@@ -1111,52 +1408,113 @@ class ProvisioningManager:
         except (OSError, ProvisioningError, subprocess.TimeoutExpired):
             return
 
-    def forget_staged(self, remote_address: str) -> Dict[str, Any]:
+    def select_saved_profile(
+        self,
+        *,
+        remote_address: str,
+        profile_uuid: Any,
+    ) -> Dict[str, Any]:
         if not self.is_ap_client(remote_address):
             raise ProvisioningError(
-                "Facility profiles can be removed only through the Pi recovery hotspot.",
+                "Saved profiles can be selected only through the Pi recovery hotspot.",
                 HTTPStatus.FORBIDDEN,
             )
+        try:
+            clean_uuid = str(uuid.UUID(str(profile_uuid or "")))
+        except (ValueError, AttributeError) as exc:
+            raise ProvisioningError("Invalid saved Wi-Fi profile.") from exc
+        profiles = {profile["uuid"]: profile for profile in self.saved_profiles()}
+        profile = profiles.get(clean_uuid)
+        if profile is None:
+            raise ProvisioningError("That saved Wi-Fi profile no longer exists.")
         with self.lock:
             if self.pending_checkpoint or self.switch_timer is not None:
                 raise ProvisioningError(
                     "Wait for the current switch to finish.",
                     HTTPStatus.CONFLICT,
                 )
-            connection_name = self.staged_connection
-            if not connection_name:
-                return {"forgotten": False, "message": "No staged profile exists."}
-        if not connection_name.startswith(FACILITY_CONNECTION_PREFIX):
+            self.staged_connection = str(profile["connection"])
+            self.staged_ssid = str(profile["ssid"])
+            self.staged_security = "saved"
+            self.last_result = f"Selected {self.staged_ssid}. The Pi remains on the hotspot."
+            self._save_state("staged")
+        return {
+            "selected": True,
+            "ssid": self.staged_ssid,
+            "message": self.last_result,
+        }
+
+    def forget_profile(
+        self,
+        *,
+        remote_address: str,
+        profile_uuid: Any,
+    ) -> Dict[str, Any]:
+        if not self.is_ap_client(remote_address):
             raise ProvisioningError(
-                "Refusing to remove a profile not owned by IntelliTrolley.",
+                "Facility profiles can be removed only through the Pi recovery hotspot.",
+                HTTPStatus.FORBIDDEN,
+            )
+        try:
+            clean_uuid = str(uuid.UUID(str(profile_uuid or "")))
+        except (ValueError, AttributeError) as exc:
+            raise ProvisioningError("Invalid saved Wi-Fi profile.") from exc
+        with self.lock:
+            if self.pending_checkpoint or self.switch_timer is not None:
+                raise ProvisioningError(
+                    "Wait for the current switch to finish.",
+                    HTTPStatus.CONFLICT,
+                )
+        profiles = {profile["uuid"]: profile for profile in self.saved_profiles()}
+        profile = profiles.get(clean_uuid)
+        if profile is None:
+            raise ProvisioningError("That saved Wi-Fi profile no longer exists.")
+        clean_name = str(profile["connection"])
+        if profile["active"] or self.active_connection() == clean_name:
+            raise ProvisioningError(
+                "The active Wi-Fi cannot be removed. Switch to the recovery hotspot first.",
                 HTTPStatus.CONFLICT,
             )
         self.runner.run(
-            ["nmcli", "connection", "delete", "id", connection_name],
+            ["nmcli", "connection", "delete", "uuid", clean_uuid],
             timeout=15,
-            check=False,
         )
-        keyfile = (
-            self.network_connections_dir / f"{connection_name}.nmconnection"
-        )
-        try:
-            keyfile.unlink()
-        except FileNotFoundError:
-            pass
+        if profile["managed"]:
+            keyfile = (
+                self.network_connections_dir / f"{clean_name}.nmconnection"
+            )
+            try:
+                keyfile.unlink()
+            except FileNotFoundError:
+                pass
         self.runner.run(
             ["nmcli", "connection", "reload"],
             timeout=10,
+        )
+        verify = self.runner.run(
+            ["nmcli", "connection", "show", "uuid", clean_uuid],
+            timeout=10,
             check=False,
         )
+        if verify.returncode == 0:
+            raise ProvisioningError(
+                "NetworkManager still reports that profile; it was not removed.",
+                HTTPStatus.BAD_GATEWAY,
+            )
         with self.lock:
-            self.staged_connection = ""
-            self.staged_ssid = ""
-            self.staged_security = ""
+            if self.staged_connection == clean_name:
+                self.staged_connection = ""
+                self.staged_ssid = ""
+                self.staged_security = ""
             self.last_result = (
-                f"Removed {connection_name}. The Pi remains on the recovery hotspot."
+                f"Removed {profile['ssid']}. The Pi remains on the recovery hotspot."
             )
             self._save_state("idle")
-        return {"forgotten": True, "message": self.last_result}
+        return {
+            "forgotten": True,
+            "uuid": clean_uuid,
+            "message": self.last_result,
+        }
 
 
 class ProvisioningServer(ThreadingHTTPServer):
@@ -1318,14 +1676,24 @@ class ProvisioningRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/confirm":
                 if payload.get("central_computer") is not True:
                     raise ProvisioningError(
-                        "Confirm this page is open on the Windows central computer."
+                        "Confirm this page is open on the computer that will operate the robot."
                     )
                 result = self.manager.confirm(
                     remote_address=self.remote_address,
                     token=payload.get("token"),
                 )
+            elif path == "/api/select":
+                result = self.manager.select_saved_profile(
+                    remote_address=self.remote_address,
+                    profile_uuid=payload.get("uuid"),
+                )
             elif path == "/api/forget":
-                result = self.manager.forget_staged(self.remote_address)
+                if payload.get("confirm") is not True:
+                    raise ProvisioningError("Confirm removal of the saved profile.")
+                result = self.manager.forget_profile(
+                    remote_address=self.remote_address,
+                    profile_uuid=payload.get("uuid"),
+                )
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
                 return
@@ -1354,6 +1722,15 @@ def build_manager_from_environment(args: argparse.Namespace) -> ProvisioningMana
         port=args.port,
         switch_timeout_s=int(
             os.getenv("ROBOT_WIFI_SWITCH_TIMEOUT_S", "180")
+        ),
+        loss_grace_s=int(
+            os.getenv("ROBOT_WIFI_LOSS_GRACE_S", "90")
+        ),
+        ready_state_path=Path(
+            os.getenv(
+                "ROBOT_WIFI_READY_STATE",
+                "/run/my-bot-network/ready.json",
+            )
         ),
         network_connections_dir=Path(
             os.getenv(
@@ -1425,11 +1802,13 @@ def main() -> None:
         f"{manager.ap_connection} recovery hotspot.",
         flush=True,
     )
+    manager.start_recovery_monitor()
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
+        manager.stop_recovery_monitor()
         server.server_close()
 
 

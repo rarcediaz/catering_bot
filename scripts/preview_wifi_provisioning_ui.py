@@ -11,6 +11,8 @@ from wifi_provisioning_server import (
     ProvisioningError,
     ProvisioningRequestHandler,
     ProvisioningServer,
+    facility_connection_name,
+    facility_connection_uuid,
     validate_psk,
     validate_ssid,
 )
@@ -25,6 +27,17 @@ class PreviewManager:
         self.staged_ssid = ""
         self.staged_security = ""
         self.pending_ssid = ""
+        self.profiles: Dict[str, Dict[str, Any]] = {
+            "5f978c9c-06eb-5d14-b8a8-94bd31d316e5": {
+                "connection": facility_connection_name("Office-5G"),
+                "uuid": "5f978c9c-06eb-5d14-b8a8-94bd31d316e5",
+                "ssid": "Office-5G",
+                "confirmed": True,
+                "active": False,
+                "staged": False,
+                "managed": True,
+            }
+        }
         self.last_result = "Preview mode: no network settings will be changed."
 
     def status(self, remote_address: str) -> Dict[str, Any]:
@@ -47,6 +60,8 @@ class PreviewManager:
                 else None
             ),
             "last_result": self.last_result,
+            "saved_profiles": list(self.profiles.values()),
+            "loss_grace_s": 90,
             "hostname": "127.0.0.1",
             "port": self.port,
         }
@@ -97,6 +112,18 @@ class PreviewManager:
         validate_psk(password, clean_security)
         self.staged_ssid = clean_ssid
         self.staged_security = clean_security
+        profile_uuid = facility_connection_uuid(clean_ssid)
+        for profile in self.profiles.values():
+            profile["staged"] = False
+        self.profiles[profile_uuid] = {
+            "connection": facility_connection_name(clean_ssid),
+            "uuid": profile_uuid,
+            "ssid": clean_ssid,
+            "confirmed": False,
+            "active": False,
+            "staged": True,
+            "managed": True,
+        }
         self.last_result = f"Preview saved {clean_ssid}; the hotspot remains active."
         return {"staged": True, "ssid": clean_ssid, "message": self.last_result}
 
@@ -121,17 +148,54 @@ class PreviewManager:
             raise ProvisioningError("Invalid preview confirmation token.")
         ssid = self.pending_ssid or self.staged_ssid or "Warehouse WiFi"
         self.pending_ssid = ""
+        for profile in self.profiles.values():
+            if profile["ssid"] == ssid:
+                profile["confirmed"] = True
+                profile["staged"] = False
+        self.staged_ssid = ""
+        self.staged_security = ""
         self.last_result = f"Preview confirmed {ssid}."
         return self._completion(remote_address, ssid)
 
-    def forget_staged(self, remote_address: str) -> Dict[str, Any]:
+    def select_saved_profile(
+        self,
+        *,
+        remote_address: str,
+        profile_uuid: Any,
+    ) -> Dict[str, Any]:
         del remote_address
-        forgotten = bool(self.staged_ssid)
-        self.staged_ssid = ""
-        self.staged_security = ""
+        profile = self.profiles.get(str(profile_uuid or ""))
+        if profile is None:
+            raise ProvisioningError("That preview profile does not exist.")
+        for candidate in self.profiles.values():
+            candidate["staged"] = False
+        profile["staged"] = True
+        self.staged_ssid = str(profile["ssid"])
+        self.staged_security = "saved"
+        self.last_result = f"Preview selected {self.staged_ssid}."
+        return {"selected": True, "ssid": self.staged_ssid, "message": self.last_result}
+
+    def forget_profile(
+        self,
+        *,
+        remote_address: str,
+        profile_uuid: Any,
+    ) -> Dict[str, Any]:
+        del remote_address
+        clean_uuid = str(profile_uuid or "")
+        profile = self.profiles.pop(clean_uuid, None)
+        if profile is None:
+            raise ProvisioningError("That preview profile does not exist.")
+        if profile["staged"]:
+            self.staged_ssid = ""
+            self.staged_security = ""
         self.pending_ssid = ""
-        self.last_result = "Preview profile removed."
-        return {"forgotten": forgotten, "message": self.last_result}
+        self.last_result = f"Preview removed {profile['ssid']}."
+        return {
+            "forgotten": True,
+            "uuid": clean_uuid,
+            "message": self.last_result,
+        }
 
     def _completion(self, remote_address: str, ssid: str) -> Dict[str, Any]:
         del remote_address

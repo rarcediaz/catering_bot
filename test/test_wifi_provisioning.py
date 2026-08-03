@@ -26,6 +26,7 @@ from wifi_provisioning_server import (  # noqa: E402
     facility_connection_name,
     keyfile_ssid_value,
     parse_nmcli_networks,
+    parse_saved_profile_rows,
     render_facility_keyfile,
     update_env_file,
     validate_psk,
@@ -34,11 +35,17 @@ from wifi_provisioning_server import (  # noqa: E402
 from preview_wifi_provisioning_ui import PreviewManager  # noqa: E402
 
 
+PROFILE_UUID_A = "11111111-2222-3333-4444-555555555555"
+PROFILE_UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
 class FakeRunner(CommandRunner):
     def __init__(self):
         self.active = "intellitrolley-ap"
         self.address = "10.42.0.1/24"
         self.robot_active = True
+        self.profiles = {}
+        self.delete_effective = True
         self.commands = []
 
     def run(self, command, *, timeout=15.0, check=True):
@@ -63,18 +70,21 @@ class FakeRunner(CommandRunner):
                 "",
             )
         if command[:5] == ["ip", "-j", "-4", "address", "show"]:
-            address, prefix = self.address.split("/")
+            address_info = []
+            if self.address:
+                address, prefix = self.address.split("/")
+                address_info.append(
+                    {
+                        "family": "inet",
+                        "scope": "global",
+                        "local": address,
+                        "prefixlen": int(prefix),
+                    }
+                )
             output = json.dumps(
                 [
                     {
-                        "addr_info": [
-                            {
-                                "family": "inet",
-                                "scope": "global",
-                                "local": address,
-                                "prefixlen": int(prefix),
-                            }
-                        ]
+                        "addr_info": address_info
                     }
                 ]
             )
@@ -86,6 +96,23 @@ class FakeRunner(CommandRunner):
                 "Campus:WPA2 802.1X:70\n"
             )
             return subprocess.CompletedProcess(command, 0, output, "")
+        if "NAME,UUID,TYPE,AUTOCONNECT,DEVICE" in command:
+            lines = [
+                f"{profile['name']}:{profile_uuid}:wifi:"
+                f"{'yes' if profile['confirmed'] else 'no'}:"
+                f"{'wlan0' if profile.get('active') else '--'}"
+                for profile_uuid, profile in self.profiles.items()
+            ]
+            return subprocess.CompletedProcess(command, 0, "\n".join(lines), "")
+        if command[:3] == ["nmcli", "--get-values", "802-11-wireless.ssid"]:
+            profile_uuid = command[-1]
+            profile = self.profiles.get(profile_uuid)
+            return subprocess.CompletedProcess(
+                command,
+                0 if profile else 10,
+                f"{profile['ssid']}\n" if profile else "",
+                "",
+            )
         if "CheckpointCreate" in command:
             return subprocess.CompletedProcess(
                 command,
@@ -104,10 +131,23 @@ class FakeRunner(CommandRunner):
             self.robot_active = False
         elif command[:2] in (["systemctl", "start"], ["systemctl", "restart"]):
             self.robot_active = True
-        if command[:5] == ["nmcli", "--wait", "45", "connection", "up"]:
+        if command[:3] == ["nmcli", "connection", "delete"]:
+            if self.delete_effective:
+                self.profiles.pop(command[-1], None)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:4] in (
+            ["nmcli", "connection", "show", "id"],
+            ["nmcli", "connection", "show", "uuid"],
+        ):
+            exists = command[-1] in self.profiles
+            return subprocess.CompletedProcess(command, 0 if exists else 10, "", "")
+        if command[:3] == ["nmcli", "--wait", "90"] and "up" in command:
             connection_index = command.index("id") + 1
             self.active = command[connection_index]
             self.address = "192.168.40.18/24"
+        elif command[:3] == ["nmcli", "--wait", "30"] and "up" in command:
+            self.active = "intellitrolley-ap"
+            self.address = "10.42.0.1/24"
         return subprocess.CompletedProcess(command, 0, "", "")
 
 
@@ -127,6 +167,8 @@ def make_manager(tmp_path, runner=None):
         hostname="zrpi-desktop.local",
         port=8090,
         switch_timeout_s=180,
+        loss_grace_s=90,
+        ready_state_path=tmp_path / "ready.json",
         network_connections_dir=tmp_path / "connections",
         state_dir=tmp_path / "state",
         robot_defaults_path=defaults,
@@ -188,6 +230,147 @@ def test_nmcli_scan_parser_classifies_personal_open_and_enterprise_networks():
     assert by_ssid["Facility:West"]["security"] == "wpa-psk"
     assert by_ssid["Guest"]["security"] == "open"
     assert by_ssid["Campus"]["security"] == "enterprise"
+
+
+def test_saved_profile_parser_keeps_multiple_managed_and_preexisting_wifi_profiles():
+    profiles = parse_saved_profile_rows(
+        f"intellitrolley-ap:99999999-8888-7777-6666-555555555555:wifi:yes:wlan0\n"
+        f"intellitrolley-facility-a:{PROFILE_UUID_A}:wifi:yes:--\n"
+        f"Avocado Hotspot:{PROFILE_UUID_B}:802-11-wireless:true:--\n"
+        "Wired:12345678-1234-1234-1234-123456789012:ethernet:yes:eth0\n",
+        "intellitrolley-ap",
+    )
+
+    assert [profile["uuid"] for profile in profiles] == [
+        PROFILE_UUID_A,
+        PROFILE_UUID_B,
+    ]
+    assert profiles[0]["managed"] is True
+    assert profiles[1]["managed"] is False
+
+
+def test_saved_profiles_can_be_selected_and_removed_by_uuid_without_touching_others(
+    tmp_path,
+):
+    runner = FakeRunner()
+    runner.profiles = {
+        PROFILE_UUID_A: {
+            "name": facility_connection_name("Facility WiFi"),
+            "ssid": "Facility WiFi",
+            "confirmed": True,
+            "active": False,
+        },
+        PROFILE_UUID_B: {
+            "name": "Avocado Hotspot",
+            "ssid": "🥑 (5654)",
+            "confirmed": True,
+            "active": False,
+        },
+    }
+    manager = make_manager(tmp_path, runner)
+
+    selected = manager.select_saved_profile(
+        remote_address="10.42.0.22",
+        profile_uuid=PROFILE_UUID_B,
+    )
+    removed = manager.forget_profile(
+        remote_address="10.42.0.22",
+        profile_uuid=PROFILE_UUID_A,
+    )
+
+    assert selected["ssid"] == "🥑 (5654)"
+    assert removed["forgotten"] is True
+    assert PROFILE_UUID_A not in runner.profiles
+    assert PROFILE_UUID_B in runner.profiles
+    assert [
+        "nmcli",
+        "connection",
+        "delete",
+        "uuid",
+        PROFILE_UUID_A,
+    ] in runner.commands
+
+
+def test_active_saved_profile_cannot_be_removed(tmp_path):
+    runner = FakeRunner()
+    runner.active = "Avocado Hotspot"
+    runner.address = "172.20.10.9/28"
+    runner.profiles = {
+        PROFILE_UUID_B: {
+            "name": "Avocado Hotspot",
+            "ssid": "🥑 (5654)",
+            "confirmed": True,
+            "active": True,
+        }
+    }
+    manager = make_manager(tmp_path, runner)
+    manager.is_ap_client = lambda remote_address: True
+
+    with pytest.raises(ProvisioningError, match="active Wi-Fi"):
+        manager.forget_profile(
+            remote_address="10.42.0.22",
+            profile_uuid=PROFILE_UUID_B,
+        )
+
+
+def test_profile_removal_reports_when_networkmanager_keeps_profile(tmp_path):
+    runner = FakeRunner()
+    runner.delete_effective = False
+    runner.profiles = {
+        PROFILE_UUID_A: {
+            "name": facility_connection_name("Facility WiFi"),
+            "ssid": "Facility WiFi",
+            "confirmed": True,
+            "active": False,
+        }
+    }
+    manager = make_manager(tmp_path, runner)
+
+    with pytest.raises(ProvisioningError, match="still reports"):
+        manager.forget_profile(
+            remote_address="10.42.0.22",
+            profile_uuid=PROFILE_UUID_A,
+        )
+
+
+def test_runtime_loss_waits_full_grace_before_starting_recovery_ap(tmp_path):
+    runner = FakeRunner()
+    manager = make_manager(tmp_path, runner)
+    manager.last_ready_signature = ("Facility WiFi", "192.168.40.18/24")
+    runner.active = ""
+    runner.address = ""
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    manager.check_runtime_recovery(now=100.0)
+    manager.check_runtime_recovery(now=189.9)
+
+    assert runner.active == ""
+    assert not any(command[:2] == ["systemctl", "stop"] for command in runner.commands)
+
+    manager.check_runtime_recovery(now=190.0)
+
+    assert runner.active == "intellitrolley-ap"
+    assert json.loads(manager.ready_state_path.read_text(encoding="utf-8"))["mode"] == "ap"
+    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+
+
+def test_runtime_loss_that_recovers_inside_grace_does_not_start_hotspot(tmp_path):
+    runner = FakeRunner()
+    manager = make_manager(tmp_path, runner)
+    runner.active = ""
+    runner.address = ""
+    manager.check_runtime_recovery(now=100.0)
+
+    runner.active = "Facility WiFi"
+    runner.address = "192.168.40.18/24"
+    manager.check_runtime_recovery(now=150.0)
+    manager.check_runtime_recovery(now=250.0)
+
+    assert runner.active == "Facility WiFi"
+    assert not any(
+        command[:3] == ["nmcli", "--wait", "30"] for command in runner.commands
+    )
 
 
 def test_mutations_require_the_active_ap_and_an_ap_subnet_client(tmp_path):
@@ -275,7 +458,7 @@ def test_network_switch_stops_ros_then_restarts_after_ipv4_is_ready(tmp_path):
     wifi_up_index = next(
         index
         for index, command in enumerate(runner.commands)
-        if command[:5] == ["nmcli", "--wait", "45", "connection", "up"]
+        if command[:5] == ["nmcli", "--wait", "90", "connection", "up"]
     )
     assert checkpoint_index < stop_index < wifi_up_index
     assert manager.pending_robot_was_active is True
@@ -470,6 +653,7 @@ def test_provisioning_and_robot_services_are_gated_on_wifi_readiness():
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/etc/NetworkManager/system-connections" in unit
+    assert "ReadWritePaths=/run/my-bot-network" in unit
     assert "Requires=my-bot-network-ready.service" in robot_unit
     assert "After=local-fs.target my-bot-network-ready.service" in robot_unit
     assert "Before=my-bot-wifi-provisioning.service my-bot-robot.service" in network_unit
@@ -477,6 +661,7 @@ def test_provisioning_and_robot_services_are_gated_on_wifi_readiness():
     assert "Wants=my-bot-robot.service" in network_unit
     assert 'ENABLE_SERVICE=false' in installer
     assert 'if [[ "${ENABLE_SERVICE}" == true ]]' in installer
+    assert "ROBOT_WIFI_LOSS_GRACE_S=90" in installer
 
 
 def test_provisioning_ui_never_places_password_in_query_or_storage():
@@ -493,7 +678,10 @@ def test_provisioning_ui_never_places_password_in_query_or_storage():
     assert "?password=" not in javascript
     assert 'api("/api/use-ap"' in javascript
     assert 'id="network-results"' in html
+    assert 'id="saved-profiles"' in html
     assert "visibleOption.textContent" in javascript
+    assert 'api("/api/select"' in javascript
+    assert "profile.uuid" in javascript
     assert "startCountdown(body.timeout_s)" in javascript
 
 

@@ -32,8 +32,10 @@ The design has two connection classes:
    higher autoconnect priority than the recovery AP.
 
 After the recovery AP is explicitly enabled, the Pi remains on it if no
-facility profile is supplied. If a confirmed facility network is unavailable
-at boot, NetworkManager can fall back to the saved AP profile.
+facility profile is supplied. Multiple client profiles may remain confirmed
+and enabled at once. If the active client disappears, NetworkManager gets a
+90-second grace period to reconnect it or select another saved client before
+the provisioner activates the recovery AP.
 
 ## Safety and rollback contract
 
@@ -47,7 +49,7 @@ local safety timeouts.
 
 A facility switch uses NetworkManager's D-Bus checkpoint API. NetworkManager
 records the working AP state before activating the facility profile. The
-switch must be confirmed from the Windows central computer on the new network
+switch must be confirmed from the Linux or Windows operator computer on the new network
 within the configured timeout (180 seconds by default). If activation or
 confirmation fails, the provisioner explicitly rolls back the checkpoint and
 activates the AP if NetworkManager has not restored it. Confirmation and
@@ -59,15 +61,16 @@ newer `device checkpoint` subcommand.
 
 The confirmation request also:
 
-- records the Windows source address as the Pi's explicit Cyclone DDS peer;
+- records the operator computer's source address as the Pi's explicit Cyclone DDS peer;
 - preserves the current ROS domain;
 - keeps `wlan0` and SPDP multicast in the Pi DDS settings;
 - ensures the robot service is running on the selected Wi-Fi; and
 - returns a validated `intellitrolley://` handoff link for the Windows
   installer to update WSL, scoped firewall rules, and the central DDS peer.
 
-The Windows step requires UAC because a browser must not silently change
-firewall or WSL settings.
+The optional Windows handoff requires UAC because a browser must not silently
+change firewall or WSL settings. Linux can confirm the connection directly and
+then use the displayed ROS domain and network details without that handoff.
 
 ## Supported facility networks
 
@@ -171,7 +174,7 @@ sudo nmcli connection up intellitrolley-ap
 sudo systemctl start my-bot-robot.service
 ```
 
-Join `IntelliTrolley` from Windows, verify `ping 10.42.0.1`, then open:
+Join `IntelliTrolley` from the operator computer, verify `ping 10.42.0.1`, then open:
 
 ```text
 http://10.42.0.1:8090/
@@ -182,26 +185,27 @@ it automatically. No facility switch occurs unless an operator saves a profile
 and presses **Switch and start rollback timer**.
 
 The optional **Configure this computer for the robot hotspot** action records
-the current Windows hotspot address as the Pi DDS peer and provides the Windows
-handoff for robot `10.42.0.1`, subnet `10.42.0.0/24`, and the existing ROS
-domain. It is not required to start the Pi network or robot service. The Pi
-stays on the AP throughout.
+the current computer's hotspot address as the Pi DDS peer. On Windows it also
+provides the handoff for robot `10.42.0.1`, subnet `10.42.0.0/24`, and the
+existing ROS domain. It is not required to start the Pi network or robot
+service. The Pi stays on the AP throughout.
 
 ## Provision a facility network
 
-1. Open the provisioning page from the Windows central computer.
+1. Open the provisioning page from the Linux or Windows operator computer.
 2. Scan and select the facility SSID from the visible nearby-network list, or
    type it exactly for a hidden network.
 3. Select Personal or Open security and enter the password if required.
 4. Press **Save without switching**. The Pi remains on its AP, and the staged
    profile is kept out of NetworkManager autoconnect until confirmation.
-5. Ensure Windows already knows the same facility Wi-Fi.
+5. Ensure the operator computer already knows the same facility Wi-Fi.
 6. Immobilize the robot and start the protected switch.
-7. Connect Windows to the facility Wi-Fi.
+7. Connect the operator computer to the facility Wi-Fi.
 8. Open the displayed `zrpi-desktop.local:8090` confirmation link.
-9. Confirm from the Windows central computer.
-10. Select **Configure IntelliTrolley on Windows**, approve UAC, and complete
-    the existing reciprocal-peer safety confirmation.
+9. Confirm from that operator computer.
+10. On Windows, optionally select **Configure IntelliTrolley on Windows** and
+    approve UAC. On Linux, use the displayed ROS domain and verify discovery
+    directly; no Windows handoff is required.
 11. Run IntelliTrolley Diagnostics and verify the Pi topics and UI.
 
 If the page cannot be reached on the facility network, do not guess a new Pi
@@ -211,7 +215,7 @@ to `IntelliTrolley`, and correct the facility settings.
 ## Boot behavior
 
 The recovery AP profile has autoconnect priority `50`. Confirmed facility
-profiles use priority `200`. The startup gate temporarily holds the AP out of
+profiles use priority `200`. The startup gate and runtime monitor hold the AP out of
 autoconnect while it tries saved client profiles for
 `ROBOT_WIFI_CLIENT_WAIT_S` (30 seconds by default). If none connects, it
 re-enables and activates the AP. With no saved client profiles, the AP starts
@@ -229,6 +233,14 @@ missing interface.
 The Wi-Fi gate requests the robot service automatically after either network
 mode becomes ready. The robot installer also enables its unit directly, so it
 remains independently manageable with `systemctl`.
+
+After boot, `my-bot-wifi-provisioning.service` monitors the selected client.
+A loss shorter than `ROBOT_WIFI_LOSS_GRACE_S` (90 seconds by default) does not
+activate the hotspot. During the grace period, any confirmed saved client may
+connect. A sustained loss stops the robot service, activates the recovery AP,
+updates the ready-state file, and starts the robot service on the AP. The same
+grace applies if an unconfirmed facility connection dies while its checkpoint
+is pending.
 
 ## ROS 2 network acceptance
 
@@ -289,8 +301,10 @@ sudo nmcli connection modify <facility-profile-name> connection.autoconnect no
 sudo nmcli connection up intellitrolley-ap
 ```
 
-The provisioning page can forget only profiles whose names begin with
-`intellitrolley-facility-`; it refuses to delete unrelated user connections.
+The provisioning page lists every saved client Wi-Fi profile, including profiles
+that existed before IntelliTrolley was installed. Removal targets the selected
+profile by NetworkManager UUID, verifies deletion, and refuses to remove an
+active connection. Other saved profiles are not changed.
 
 ## Logs and status
 

@@ -330,6 +330,45 @@ button:disabled {
   background: var(--green-soft);
 }
 
+.profile-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.profile-row > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.profile-row strong {
+  overflow-wrap: anywhere;
+}
+
+.profile-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .saved-network strong {
   font-size: 1.15rem;
 }
@@ -443,6 +482,15 @@ footer {
 
   .hero {
     gap: 14px;
+  }
+
+  .profile-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .profile-actions button {
+    flex: 1;
   }
 
   .brand-mark {

@@ -241,9 +241,10 @@ class WifiStartup:
         existing = self.ready(allow_ap=False)
         if existing is not None:
             connection, address = existing
-            # Keep the AP eligible for runtime recovery if this client later
-            # disappears; its lower priority prevents it replacing the client.
-            self.set_ap_autoconnect(True)
+            # A persistent provisioner watchdog owns runtime fallback. Keeping
+            # the AP out of NetworkManager autoconnect prevents a momentary
+            # client outage from switching networks before its grace period.
+            self.set_ap_autoconnect(False)
             self.write_state("client", connection, address)
             return f"Saved Wi-Fi ready: {connection} on {address}"
 
@@ -265,7 +266,7 @@ class WifiStartup:
             print(f"Trying saved Wi-Fi profile {profile.name!r}...", flush=True)
             if self.activate_profile(profile, attempt_s):
                 connection, address = self.ready(allow_ap=False)  # type: ignore[misc]
-                self.set_ap_autoconnect(True)
+                self.set_ap_autoconnect(False)
                 self.write_state("client", connection, address)
                 return f"Saved Wi-Fi ready: {connection} on {address}"
 

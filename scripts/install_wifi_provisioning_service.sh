@@ -94,7 +94,8 @@ fi
 
 tmp_unit="$(mktemp)"
 tmp_network_unit="$(mktemp)"
-trap 'rm -f "${tmp_unit}" "${tmp_network_unit}"' EXIT
+tmp_defaults="$(mktemp)"
+trap 'rm -f "${tmp_unit}" "${tmp_network_unit}" "${tmp_defaults}"' EXIT
 sed \
   -e "s|@ROBOT_PACKAGE_DIR@|${PACKAGE_DIR}|g" \
   "${TEMPLATE_PATH}" >"${tmp_unit}"
@@ -125,7 +126,18 @@ if [[ ! -e "${DEFAULTS_PATH}" ]]; then
   sudo install -m 0644 "${DEFAULTS_TEMPLATE}" "${DEFAULTS_PATH}"
   echo "Installed editable settings at ${DEFAULTS_PATH}."
 else
-  echo "Preserved existing settings at ${DEFAULTS_PATH}."
+  cp "${DEFAULTS_PATH}" "${tmp_defaults}"
+  if ! grep -q '^ROBOT_WIFI_LOSS_GRACE_S=' "${tmp_defaults}"; then
+    cat >>"${tmp_defaults}" <<'EOF'
+
+# Wait through brief client outages before starting the recovery hotspot.
+ROBOT_WIFI_LOSS_GRACE_S=90
+EOF
+    sudo install -m 0644 "${tmp_defaults}" "${DEFAULTS_PATH}"
+    echo "Preserved existing settings and added the 90-second loss grace."
+  else
+    echo "Preserved existing settings at ${DEFAULTS_PATH}."
+  fi
 fi
 sudo systemctl daemon-reload
 

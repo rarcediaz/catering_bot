@@ -40,7 +40,8 @@
         <strong>The robot hotspot remains the recovery path.</strong>
         <span>
           If the facility connection cannot be confirmed, NetworkManager
-          automatically restores the previous hotspot.
+          automatically restores the previous hotspot. A dropped client gets
+          90 seconds to reconnect or move to another saved network first.
         </span>
       </div>
 
@@ -52,8 +53,8 @@
           </div>
         </div>
         <p>
-          This optional step is only for explicit ROS 2 peer and Windows
-          settings. The Pi and robot service already use
+          This optional step records this computer as an explicit ROS 2 peer.
+          The Pi and robot service already use
           <strong>IntelliTrolley</strong> automatically; this does not switch Wi-Fi.
         </p>
         <label class="checkbox-row safety-check">
@@ -136,15 +137,28 @@
         <p class="message" id="facility-message" role="status"></p>
       </section>
 
+      <section class="card hidden" id="saved-profiles-card">
+        <div class="card-heading">
+          <div>
+            <p class="step-label">Saved connections</p>
+            <h2>Known facility Wi-Fi</h2>
+          </div>
+        </div>
+        <p>
+          Confirmed profiles are all retained and tried automatically. Select a
+          profile to test it, or remove one explicitly. The active connection
+          cannot be removed.
+        </p>
+        <div class="profile-list" id="saved-profiles"></div>
+        <p class="message" id="profiles-message" role="status"></p>
+      </section>
+
       <section class="card hidden" id="switch-card">
         <div class="card-heading">
           <div>
             <p class="step-label">Step 2</p>
             <h2>Test the saved connection</h2>
           </div>
-          <button class="text-button" id="forget-button" type="button">
-            Forget saved profile
-          </button>
         </div>
 
         <div class="saved-network">
@@ -154,9 +168,9 @@
 
         <ol class="checklist">
           <li>Keep the robot stopped and wheels raised or immobilized.</li>
-          <li>Make sure the Windows computer also knows the facility Wi-Fi.</li>
+          <li>Make sure this computer also knows the facility Wi-Fi.</li>
           <li>
-            After switching, reconnect Windows to that Wi-Fi and use the
+            After switching, reconnect this computer to that Wi-Fi and use the
             confirmation link before the timer expires.
           </li>
         </ol>
@@ -176,7 +190,7 @@
         <p class="step-label">Step 3</p>
         <h2>Reconnect and confirm</h2>
         <p>
-          Connect this Windows computer to <strong id="pending-ssid">the facility Wi-Fi</strong>,
+          Connect this computer to <strong id="pending-ssid">the facility Wi-Fi</strong>,
           then open the link below. If it cannot be reached, wait for the Pi
           hotspot to return.
         </p>
@@ -188,12 +202,12 @@
         <p class="step-label">Final confirmation</p>
         <h2>Keep this facility connection?</h2>
         <p>
-          Confirm only from the Windows computer that runs IntelliTrolley
-          Central. Its address will become the Pi’s explicit ROS 2 peer.
+          Confirm from the Linux or Windows computer that will operate the robot.
+          Its address will become the Pi’s explicit ROS 2 peer.
         </p>
         <label class="checkbox-row safety-check">
           <input id="central-computer" type="checkbox" />
-          <span>This is the Windows IntelliTrolley Central computer.</span>
+          <span>This computer will operate or monitor IntelliTrolley.</span>
         </label>
         <button class="primary" id="confirm-button" type="button" disabled>
           Confirm facility Wi-Fi
@@ -203,7 +217,7 @@
 
       <section class="card success-card hidden" id="complete-card">
         <p class="step-label">Network configured</p>
-        <h2>Apply the new robot network to Windows</h2>
+        <h2>Robot network ready</h2>
         <p id="complete-message"></p>
         <dl class="network-summary">
           <div>
@@ -215,7 +229,7 @@
             <dd id="robot-subnet">—</dd>
           </div>
           <div>
-            <dt>Windows address</dt>
+            <dt>Operator address</dt>
             <dd id="central-address">—</dd>
           </div>
           <div>
@@ -223,13 +237,15 @@
             <dd id="ros-domain">—</dd>
           </div>
         </dl>
-        <a class="primary action-link" id="windows-config-link" href="#">
-          Configure IntelliTrolley on Windows
-        </a>
-        <p class="fine-print">
-          Windows will request administrator approval because firewall and WSL
-          peer settings must be updated.
-        </p>
+        <div id="windows-tools">
+          <a class="primary action-link" id="windows-config-link" href="#">
+            Optional: configure Windows Central
+          </a>
+          <p class="fine-print">
+            Linux needs no Windows handoff. Use the displayed ROS domain and
+            verify ROS discovery from Linux on this network.
+          </p>
+        </div>
       </section>
 
       <footer>

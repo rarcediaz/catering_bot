@@ -29,6 +29,7 @@ LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/etc/NetworkManager/system-connections
 ReadWritePaths=/etc/default/my-bot-robot
+ReadWritePaths=/run/my-bot-network
 StateDirectory=my-bot-wifi-provisioning
 StateDirectoryMode=0700
 RuntimeDirectory=my-bot-wifi-provisioning
