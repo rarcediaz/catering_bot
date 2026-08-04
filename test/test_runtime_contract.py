@@ -531,6 +531,10 @@ def test_localization_remains_recoverable_before_navigation_activation():
     assert "'autostart': False" in nav2_launch
     assert "executable='nav2_startup_gate.py'" in nav2_launch
     assert 'not self._localized' in startup_gate
+    assert "'keepout_topic': '/keepout_filter_mask'" in nav2_launch
+    assert "'require_keepout': use_keepout" in nav2_launch
+    assert 'localization_maps_fault(' in startup_gate
+    assert 'robot footprint overlaps a static wall or obstacle' in startup_gate
     assert 'Navigation lifecycle startup was not successful. Retrying.' in startup_gate
 
 

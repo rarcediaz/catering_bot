@@ -40,6 +40,10 @@ if(BUILD_TESTING)
     test/test_safety_logic.py
   )
   ament_add_pytest_test(
+    nav2_startup_gate_test
+    test/test_nav2_startup_gate.py
+  )
+  ament_add_pytest_test(
     wifi_startup_test
     test/test_wifi_startup.py
   )

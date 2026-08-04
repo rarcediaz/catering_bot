@@ -220,6 +220,9 @@ def generate_launch_description():
                 parameters=[{
                     'use_sim_time': use_sim_time,
                     'localization_topic': '/amcl_pose',
+                    'map_topic': '/map',
+                    'keepout_topic': '/keepout_filter_mask',
+                    'require_keepout': use_keepout,
                     'manager_service': '/lifecycle_manager_navigation/manage_nodes',
                 }],
             ),
