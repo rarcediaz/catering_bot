@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<class_libraries>
+  <library path="my_bot_mppi_critics">
+    <class
+      type="mppi::critics::FinalApproachDirectionCritic"
+      base_class_type="mppi::critics::CriticFunction">
+      <description>
+        Preserves the robot's established forward or reverse direction during final approach.
+      </description>
+    </class>
+  </library>
+</class_libraries>

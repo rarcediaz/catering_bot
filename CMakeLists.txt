@@ -17,9 +17,50 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+# The same package is built on both the minimal Pi hardware image and the
+# central navigation computer. Build the MPPI extension only where Nav2 is
+# installed; the Pi does not run or require a local controller server.
+find_package(nav2_mppi_controller QUIET)
+if(nav2_mppi_controller_FOUND)
+  find_package(pluginlib REQUIRED)
+  find_package(rclcpp REQUIRED)
+  find_package(xtensor REQUIRED)
+
+  add_library(my_bot_mppi_critics SHARED
+    src/final_approach_direction_critic.cpp
+  )
+  target_compile_features(my_bot_mppi_critics PUBLIC cxx_std_17)
+  target_compile_options(my_bot_mppi_critics PUBLIC -fconcepts)
+  target_include_directories(my_bot_mppi_critics PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(my_bot_mppi_critics xtensor)
+  ament_target_dependencies(my_bot_mppi_critics
+    nav2_mppi_controller
+    pluginlib
+    rclcpp
+  )
+
+  pluginlib_export_plugin_description_file(
+    nav2_mppi_controller
+    my_bot_mppi_critics.xml
+  )
+
+  install(
+    TARGETS my_bot_mppi_critics
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+
+  install(
+    DIRECTORY include/
+    DESTINATION include
+  )
+else()
+  message(STATUS "Nav2 MPPI is unavailable; skipping central navigation critic build.")
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -51,6 +92,16 @@ if(BUILD_TESTING)
     wifi_provisioning_test
     test/test_wifi_provisioning.py
   )
+  if(TARGET my_bot_mppi_critics)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(
+      final_approach_direction_latch_test
+      test/test_final_approach_direction_latch.cpp
+    )
+    target_compile_features(final_approach_direction_latch_test PUBLIC cxx_std_17)
+    target_include_directories(final_approach_direction_latch_test PRIVATE include)
+    target_link_libraries(final_approach_direction_latch_test my_bot_mppi_critics)
+  endif()
 endif()
 
 install(

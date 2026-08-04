@@ -245,6 +245,18 @@ def test_navigation_finishes_by_position_without_a_final_heading_spin():
     assert re.search(r'xy_goal_tolerance:\s*0\.35\b', nav2)
 
 
+def test_final_approach_preserves_the_established_travel_direction():
+    nav2 = read('config/nav2_params.yaml')
+    plugin_xml = read('my_bot_mppi_critics.xml')
+
+    assert '"FinalApproachDirectionCritic"' in nav2
+    assert re.search(r'FinalApproachDirectionCritic:\s+enabled:\s+true', nav2)
+    assert re.search(r'approach_distance:\s*1\.4\b', nav2)
+    assert re.search(r'cost_weight:\s*20\.0\b', nav2)
+    assert re.search(r'opposite_confirmation_cycles:\s*5\b', nav2)
+    assert 'mppi::critics::FinalApproachDirectionCritic' in plugin_xml
+
+
 def test_rotation_counts_as_navigation_progress():
     nav2 = read('config/nav2_params.yaml')
 
@@ -303,7 +315,7 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     assert re.search(
         r'critics:\s*\["ConstraintCritic", "CostCritic", "GoalCritic", '
         r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic", '
-        r'"PreferForwardCritic"\]',
+        r'"PreferForwardCritic", "FinalApproachDirectionCritic"\]',
         nav2,
     )
     assert re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
