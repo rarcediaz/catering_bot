@@ -317,8 +317,10 @@ local_costmap:
         # Costmap filters run after the ordinary inflation plugin. Inflate the
         # keepout mask separately so the planner keeps the axle center away
         # from its lethal edge instead of proposing paths the full trolley
-        # footprint and Pi-local safety layer cannot follow.
-        cost_scaling_factor: 4.0
+        # footprint and Pi-local safety layer cannot follow. Decay this static
+        # keepout preference slightly faster than live-obstacle inflation so
+        # its medium-cost halo does not unnecessarily slow a clear aisle.
+        cost_scaling_factor: 5.0
         inflation_radius: 0.60
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -367,8 +369,10 @@ global_costmap:
       keepout_inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Apply the same clearance field after the keepout mask so NavFn does
-        # not route the robot center along an uninflated keepout boundary.
-        cost_scaling_factor: 4.0
+        # not route the robot center along an uninflated keepout boundary. The
+        # steeper decay keeps the hard boundary and outer awareness radius but
+        # gives the global planner more usable width in a clear aisle.
+        cost_scaling_factor: 5.0
         inflation_radius: 0.60
       preferred_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"

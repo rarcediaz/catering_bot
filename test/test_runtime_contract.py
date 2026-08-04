@@ -352,7 +352,10 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
     # Each costmap has ordinary obstacle inflation plus a second inflation
     # stage that runs after the keepout filter.
     assert inflation_radii == [0.60, 0.60, 0.60, 0.60]
-    assert inflation_scales == [4.0, 4.0, 4.0, 4.0]
+    # Keepout costs decay a little faster than live-obstacle costs. The hard
+    # keepout cells, footprint collision checks, and 0.60 m outer radius stay
+    # unchanged while the medium-cost static halo occupies less of an aisle.
+    assert inflation_scales == [4.0, 5.0, 5.0, 4.0]
     assert nav2.count(
         'filters: ["keepout_filter", "keepout_inflation_layer"]'
     ) == 1
@@ -393,7 +396,8 @@ def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
     assert nav2.count('observation_persistence: 0.20') == 1
     assert nav2.count('observation_persistence: 0.75') == 1
     assert nav2.count('inflation_radius: 0.60') == 4
-    assert nav2.count('cost_scaling_factor: 4.0') == 4
+    assert nav2.count('cost_scaling_factor: 4.0') == 2
+    assert nav2.count('cost_scaling_factor: 5.0') == 2
 
 
 def test_normal_navigation_can_reverse_safely_and_replans_stably():
