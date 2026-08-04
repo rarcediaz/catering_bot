@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from pathlib import Path
 import subprocess
@@ -47,6 +48,13 @@ class FakeRunner(CommandRunner):
         self.profiles = {}
         self.delete_effective = True
         self.commands = []
+        self.checkpoint_origin = None
+        self.checkpoint_live = False
+        self.checkpoint_rollback_succeeds = True
+        self.checkpoint_destroy_succeeds = True
+        self.ap_activation_succeeds = True
+        self.client_activation_succeeds = True
+        self.connection_addresses = {}
 
     def run(self, command, *, timeout=15.0, check=True):
         self.commands.append(list(command))
@@ -114,12 +122,33 @@ class FakeRunner(CommandRunner):
                 "",
             )
         if "CheckpointCreate" in command:
+            self.checkpoint_origin = (self.active, self.address)
+            self.checkpoint_live = True
             return subprocess.CompletedProcess(
                 command,
                 0,
                 'o "/org/freedesktop/NetworkManager/Checkpoint/8"\n',
                 "",
             )
+        if "CheckpointRollback" in command:
+            if not self.checkpoint_rollback_succeeds:
+                return subprocess.CompletedProcess(command, 1, "", "rollback failed")
+            if self.checkpoint_origin is not None:
+                self.active, self.address = self.checkpoint_origin
+            self.checkpoint_live = False
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "CheckpointDestroy" in command:
+            if not self.checkpoint_destroy_succeeds:
+                return subprocess.CompletedProcess(command, 1, "", "destroy failed")
+            self.checkpoint_live = False
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[-1:] == ["Checkpoints"]:
+            output = (
+                'ao 1 "/org/freedesktop/NetworkManager/Checkpoint/8"\n'
+                if self.checkpoint_live
+                else "ao 0\n"
+            )
+            return subprocess.CompletedProcess(command, 0, output, "")
         if command[:3] == ["systemctl", "is-active", "--quiet"]:
             return subprocess.CompletedProcess(
                 command,
@@ -146,8 +175,22 @@ class FakeRunner(CommandRunner):
             self.active = command[connection_index]
             self.address = "192.168.40.18/24"
         elif command[:3] == ["nmcli", "--wait", "30"] and "up" in command:
-            self.active = "intellitrolley-ap"
-            self.address = "10.42.0.1/24"
+            connection_index = command.index("id") + 1
+            connection = command[connection_index]
+            succeeds = (
+                self.ap_activation_succeeds
+                if connection == "intellitrolley-ap"
+                else self.client_activation_succeeds
+            )
+            if not succeeds:
+                return subprocess.CompletedProcess(command, 10, "", "activation failed")
+            self.active = connection
+            self.address = self.connection_addresses.get(
+                connection,
+                "10.42.0.1/24"
+                if connection == "intellitrolley-ap"
+                else "192.168.40.18/24",
+            )
         return subprocess.CompletedProcess(command, 0, "", "")
 
 
@@ -304,11 +347,10 @@ def test_active_saved_profile_cannot_be_removed(tmp_path):
         }
     }
     manager = make_manager(tmp_path, runner)
-    manager.is_ap_client = lambda remote_address: True
 
     with pytest.raises(ProvisioningError, match="active Wi-Fi"):
         manager.forget_profile(
-            remote_address="10.42.0.22",
+            remote_address="172.20.10.8",
             profile_uuid=PROFILE_UUID_B,
         )
 
@@ -352,7 +394,123 @@ def test_runtime_loss_waits_full_grace_before_starting_recovery_ap(tmp_path):
 
     assert runner.active == "intellitrolley-ap"
     assert json.loads(manager.ready_state_path.read_text(encoding="utf-8"))["mode"] == "ap"
-    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    assert scheduled == []
+    assert ["systemctl", "start", "my-bot-robot.service"] in runner.commands
+
+
+def test_runtime_recovery_locks_mutations_until_hotspot_and_robot_are_ready(
+    tmp_path,
+):
+    runner = FakeRunner()
+    runner.active = ""
+    runner.address = ""
+    manager = make_manager(tmp_path, runner)
+    manager.check_runtime_recovery(now=100.0)
+
+    stop_started = threading.Event()
+    allow_stop = threading.Event()
+    recovery_errors = []
+
+    def blocking_stop():
+        stop_started.set()
+        assert allow_stop.wait(timeout=3)
+        runner.robot_active = False
+        return True
+
+    manager._stop_robot_service_for_switch = blocking_stop
+
+    def recover():
+        try:
+            manager.check_runtime_recovery(now=190.0)
+        except Exception as exc:  # pragma: no cover - asserted below
+            recovery_errors.append(exc)
+
+    recovery_thread = threading.Thread(target=recover)
+    recovery_thread.start()
+    assert stop_started.wait(timeout=3)
+    assert manager.transition_phase == "runtime_recovery"
+
+    # Even if a client network appears while AP recovery owns the interface,
+    # same-subnet browser requests must stay read-only until recovery finishes.
+    runner.active = "Facility A"
+    runner.address = "172.20.10.9/28"
+    status = manager.status("172.20.10.8")
+    assert status["can_provision"] is False
+    with pytest.raises(ProvisioningError, match="current Wi-Fi operation"):
+        manager.stage(
+            remote_address="172.20.10.8",
+            ssid="Another WiFi",
+            password="correct-horse-battery",
+            security="wpa-psk",
+            hidden=False,
+        )
+
+    allow_stop.set()
+    recovery_thread.join(timeout=3)
+    assert not recovery_thread.is_alive()
+    assert not recovery_errors
+    assert runner.active == "intellitrolley-ap"
+    assert runner.address == "10.42.0.1/24"
+    assert manager.transition_phase == "idle"
+    assert runner.robot_active is True
+
+
+def test_failed_runtime_hotspot_recovery_retries_after_a_new_grace_period(tmp_path):
+    runner = FakeRunner()
+    runner.active = ""
+    runner.address = ""
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+
+    manager.check_runtime_recovery(now=100.0)
+    manager.check_runtime_recovery(now=190.0)
+
+    assert manager.transition_phase == "idle"
+    assert manager.loss_started_at == 190.0
+    assert manager.robot_restart_required is True
+    assert runner.robot_active is False
+    assert ["systemctl", "start", "my-bot-robot.service"] not in runner.commands
+    attempts = sum(
+        command[:5] == ["nmcli", "--wait", "30", "connection", "up"]
+        for command in runner.commands
+    )
+    manager.check_runtime_recovery(now=279.9)
+    assert sum(
+        command[:5] == ["nmcli", "--wait", "30", "connection", "up"]
+        for command in runner.commands
+    ) == attempts
+    manager.check_runtime_recovery(now=280.0)
+    assert sum(
+        command[:5] == ["nmcli", "--wait", "30", "connection", "up"]
+        for command in runner.commands
+    ) == attempts + 1
+
+
+def test_same_wifi_returning_after_failed_hotspot_recovery_restarts_robot(
+    tmp_path,
+):
+    runner = FakeRunner()
+    runner.active = ""
+    runner.address = ""
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+    manager.last_ready_signature = ("Facility A", "172.20.10.9/28")
+
+    manager.check_runtime_recovery(now=100.0)
+    manager.check_runtime_recovery(now=190.0)
+    assert runner.robot_active is False
+    assert manager.robot_restart_required is True
+
+    runner.active = "Facility A"
+    runner.address = "172.20.10.9/28"
+    manager.check_runtime_recovery(now=191.0)
+
+    assert runner.robot_active is True
+    assert manager.robot_restart_required is False
+    assert manager.transition_phase == "idle"
+    assert ["systemctl", "start", "my-bot-robot.service"] in runner.commands
+    state = json.loads(manager.state_path.read_text(encoding="utf-8"))
+    assert state["robot_restart_required"] is False
 
 
 def test_runtime_loss_that_recovers_inside_grace_does_not_start_hotspot(tmp_path):
@@ -373,13 +531,236 @@ def test_runtime_loss_that_recovers_inside_grace_does_not_start_hotspot(tmp_path
     )
 
 
-def test_mutations_require_the_active_ap_and_an_ap_subnet_client(tmp_path):
+def test_mutations_require_a_client_on_the_active_wifi_subnet(tmp_path):
     runner = FakeRunner()
     manager = make_manager(tmp_path, runner)
+    assert manager.is_active_wifi_client("10.42.0.22")
     assert manager.is_ap_client("10.42.0.22")
-    assert not manager.is_ap_client("192.168.1.20")
+    assert not manager.is_active_wifi_client("192.168.1.20")
+    ap_status = manager.status("10.42.0.22")
+    assert ap_status["can_provision"] is True
+    assert ap_status["using_recovery_ap"] is True
+    assert ap_status["can_configure_ap"] is True
+
     runner.active = "Facility WiFi"
-    assert not manager.is_ap_client("10.42.0.22")
+    runner.address = "172.20.10.9/28"
+    assert manager.is_active_wifi_client("172.20.10.8")
+    assert not manager.is_active_wifi_client("10.42.0.22")
+    assert not manager.is_ap_client("172.20.10.8")
+
+    status = manager.status("172.20.10.8")
+    assert status["can_provision"] is True
+    assert status["using_recovery_ap"] is False
+    assert status["can_configure_ap"] is False
+
+    runner.active = ""
+    runner.address = ""
+    assert not manager.is_active_wifi_client("172.20.10.8")
+    assert not manager.is_active_wifi_client("fe80::22")
+
+
+def test_stage_from_active_facility_wifi_does_not_switch_connections(tmp_path):
+    runner = FakeRunner()
+    runner.active = "Avocado Hotspot"
+    runner.address = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+
+    result = manager.stage(
+        remote_address="172.20.10.8",
+        ssid="Facility WiFi",
+        password="correct-horse-battery",
+        security="wpa-psk",
+        hidden=False,
+    )
+
+    assert result["staged"] is True
+    assert runner.active == "Avocado Hotspot"
+    assert runner.address == "172.20.10.9/28"
+    assert "stayed on its current Wi-Fi" in result["message"]
+
+
+def test_stage_cannot_overwrite_the_active_managed_profile(tmp_path):
+    runner = FakeRunner()
+    connection_name = facility_connection_name("Facility WiFi")
+    runner.active = connection_name
+    runner.address = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+    manager.network_connections_dir.mkdir(parents=True)
+    keyfile = manager.network_connections_dir / f"{connection_name}.nmconnection"
+    keyfile.write_text("original-profile\n", encoding="utf-8")
+
+    with pytest.raises(ProvisioningError, match="currently active"):
+        manager.stage(
+            remote_address="172.20.10.8",
+            ssid="Facility WiFi",
+            password="replacement-password",
+            security="wpa-psk",
+            hidden=False,
+        )
+
+    assert keyfile.read_text(encoding="utf-8") == "original-profile\n"
+    assert ["nmcli", "connection", "reload"] not in runner.commands
+    assert manager.transition_phase == "idle"
+
+
+def test_profile_mutations_are_disabled_during_a_wifi_transition(tmp_path):
+    runner = FakeRunner()
+    runner.profiles = {
+        PROFILE_UUID_A: {
+            "name": facility_connection_name("Facility WiFi"),
+            "ssid": "Facility WiFi",
+            "confirmed": True,
+            "active": False,
+        }
+    }
+    manager = make_manager(tmp_path, runner)
+    manager.staged_connection = facility_connection_name("Facility WiFi")
+    manager.staged_ssid = "Facility WiFi"
+    manager.transition_phase = "pending_confirmation"
+
+    status = manager.status("10.42.0.22")
+    assert status["can_provision"] is False
+    assert status["can_configure_ap"] is False
+
+    operations = [
+        lambda: manager.scan_networks("10.42.0.22"),
+        lambda: manager.stage(
+            remote_address="10.42.0.22",
+            ssid="Another WiFi",
+            password="correct-horse-battery",
+            security="wpa-psk",
+            hidden=False,
+        ),
+        lambda: manager.select_saved_profile(
+            remote_address="10.42.0.22",
+            profile_uuid=PROFILE_UUID_A,
+        ),
+        lambda: manager.forget_profile(
+            remote_address="10.42.0.22",
+            profile_uuid=PROFILE_UUID_A,
+        ),
+        lambda: manager.activate("10.42.0.22"),
+        lambda: manager.configure_current_ap("10.42.0.22"),
+    ]
+    for operation in operations:
+        with pytest.raises(ProvisioningError, match="current Wi-Fi|already pending"):
+            operation()
+
+
+def test_loaded_pending_state_is_read_only_until_explicit_recovery(tmp_path):
+    writer = make_manager(tmp_path, FakeRunner())
+    writer.pending_connection = facility_connection_name("Unconfirmed B")
+    writer.pending_ssid = "Unconfirmed B"
+    writer.pending_previous_connection = "Facility A"
+    writer.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    writer.pending_robot_was_active = True
+    writer._save_state("pending")
+
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.checkpoint_origin = ("Facility A", "172.20.10.9/28")
+    runner.connection_addresses["Facility A"] = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+
+    assert manager.transition_phase == "interrupted_recovery"
+    assert manager.pending_checkpoint == (
+        "/org/freedesktop/NetworkManager/Checkpoint/8"
+    )
+    assert manager.status("192.168.50.25")["can_provision"] is False
+    with pytest.raises(ProvisioningError, match="current Wi-Fi operation"):
+        manager.stage(
+            remote_address="192.168.50.25",
+            ssid="Another WiFi",
+            password="correct-horse-battery",
+            security="wpa-psk",
+            hidden=False,
+        )
+    assert ["nmcli", "connection", "reload"] not in runner.commands
+
+    manager._recover_interrupted_switch(now=100.0)
+
+    assert runner.active == "Facility A"
+    assert runner.address == "172.20.10.9/28"
+    assert manager.transition_phase == "idle"
+    assert not manager.pending_connection
+    assert not manager.pending_previous_connection
+    assert any("CheckpointRollback" in command for command in runner.commands)
+    assert any("CheckpointDestroy" in command for command in runner.commands)
+    assert json.loads(manager.state_path.read_text(encoding="utf-8"))["phase"] == (
+        "rolled_back"
+    )
+    ready = json.loads(manager.ready_state_path.read_text(encoding="utf-8"))
+    assert ready["mode"] == "client"
+    assert ready["connection"] == "Facility A"
+    assert manager.status("172.20.10.8")["can_provision"] is True
+    assert not any(
+        "intellitrolley-ap" in command and "up" in command
+        for command in runner.commands
+    )
+    assert runner.robot_active is True
+
+
+def test_failed_interrupted_recovery_keeps_the_portal_locked(tmp_path):
+    writer = make_manager(tmp_path, FakeRunner())
+    writer.pending_connection = facility_connection_name("Unconfirmed B")
+    writer.pending_ssid = "Unconfirmed B"
+    writer.pending_previous_connection = "Unavailable Facility A"
+    writer._save_state("pending")
+
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.client_activation_succeeds = False
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+
+    manager._recover_interrupted_switch(now=100.0)
+
+    assert manager.transition_phase == "interrupted_recovery"
+    assert manager.status("192.168.50.25")["can_provision"] is False
+    assert json.loads(manager.state_path.read_text(encoding="utf-8"))["phase"] == (
+        "pending"
+    )
+
+
+def test_live_checkpoint_must_be_disarmed_before_interrupted_recovery_unlocks(
+    tmp_path,
+):
+    writer = make_manager(tmp_path, FakeRunner())
+    writer.pending_connection = facility_connection_name("Unconfirmed B")
+    writer.pending_ssid = "Unconfirmed B"
+    writer.pending_previous_connection = "Facility A"
+    writer.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    writer._save_state("pending")
+
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.checkpoint_live = True
+    runner.checkpoint_rollback_succeeds = False
+    runner.checkpoint_destroy_succeeds = False
+    runner.connection_addresses["Facility A"] = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+
+    manager._recover_interrupted_switch(now=100.0)
+
+    assert manager.transition_phase == "interrupted_recovery"
+    assert manager.pending_checkpoint == (
+        "/org/freedesktop/NetworkManager/Checkpoint/8"
+    )
+    assert runner.active == facility_connection_name("Unconfirmed B")
+    assert runner.robot_active is False
+    assert manager.status("192.168.50.25")["can_provision"] is False
+
+    runner.checkpoint_destroy_succeeds = True
+    manager.interrupted_retry_at = 0.0
+    manager._recover_interrupted_switch(now=200.0)
+
+    assert manager.pending_checkpoint == ""
+    assert manager.transition_phase == "idle"
+    assert runner.active == "Facility A"
+    assert runner.robot_active is True
 
 
 def test_stage_writes_root_style_keyfile_without_switching(tmp_path):
@@ -436,12 +817,28 @@ def test_switch_uses_networkmanager_dbus_checkpoint_and_never_passes_psk(tmp_pat
     assert "deadline" not in response
 
 
+def test_activating_the_current_wifi_does_not_start_a_checkpoint(tmp_path):
+    runner = FakeRunner()
+    manager = make_manager(tmp_path, runner)
+    manager.staged_connection = runner.active
+    manager.staged_ssid = "IntelliTrolley"
+    manager.staged_security = "saved"
+
+    with pytest.raises(ProvisioningError, match="already active"):
+        manager.activate("10.42.0.22")
+
+    assert not any("CheckpointCreate" in command for command in runner.commands)
+    assert ["systemctl", "stop", "my-bot-robot.service"] not in runner.commands
+
+
 def test_network_switch_stops_ros_then_restarts_after_ipv4_is_ready(tmp_path):
     runner = FakeRunner()
     manager = make_manager(tmp_path, runner)
     manager.pending_connection = facility_connection_name("Facility WiFi")
     manager.pending_ssid = "Facility WiFi"
+    manager.pending_previous_connection = runner.active
     manager.pending_deadline = time.monotonic() + 120
+    manager.transition_phase = "scheduled"
     scheduled = []
     manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
 
@@ -472,7 +869,9 @@ def test_network_switch_restarts_robot_even_if_service_was_inactive(tmp_path):
     manager = make_manager(tmp_path, runner)
     manager.pending_connection = facility_connection_name("Facility WiFi")
     manager.pending_ssid = "Facility WiFi"
+    manager.pending_previous_connection = runner.active
     manager.pending_deadline = time.monotonic() + 120
+    manager.transition_phase = "scheduled"
     scheduled = []
     manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
 
@@ -483,6 +882,32 @@ def test_network_switch_restarts_robot_even_if_service_was_inactive(tmp_path):
     manager.rollback_timer.cancel()
 
 
+def test_stop_timeout_recovery_restores_wifi_and_robot_before_unlocking(tmp_path):
+    runner = FakeRunner()
+    manager = make_manager(tmp_path, runner)
+    manager.pending_connection = facility_connection_name("Facility WiFi")
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_previous_connection = runner.active
+    manager.pending_deadline = time.monotonic() + 120
+    manager.transition_phase = "scheduled"
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    def stop_then_timeout():
+        runner.robot_active = False
+        raise subprocess.TimeoutExpired(["systemctl", "stop"], 45)
+
+    manager._stop_robot_service_for_switch = stop_then_timeout
+    manager._start_checkpoint_switch()
+
+    assert runner.active == "intellitrolley-ap"
+    assert runner.address == "10.42.0.1/24"
+    assert runner.robot_active is True
+    assert manager.robot_restart_required is False
+    assert manager.transition_phase == "idle"
+    assert scheduled == []
+
+
 def test_hotspot_rollback_stops_then_ensures_ros_restarts(tmp_path):
     runner = FakeRunner()
     runner.active = facility_connection_name("Facility WiFi")
@@ -490,7 +915,9 @@ def test_hotspot_rollback_stops_then_ensures_ros_restarts(tmp_path):
     manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
     manager.pending_connection = facility_connection_name("Facility WiFi")
     manager.pending_ssid = "Facility WiFi"
+    manager.pending_previous_connection = "intellitrolley-ap"
     manager.pending_robot_was_active = True
+    manager.transition_phase = "pending_confirmation"
     scheduled = []
     manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
 
@@ -517,8 +944,126 @@ def test_hotspot_rollback_stops_then_ensures_ros_restarts(tmp_path):
         "ifname",
         "wlan0",
     ] in runner.commands
-    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    assert scheduled == []
+    assert ["systemctl", "start", "my-bot-robot.service"] in runner.commands
     assert manager.pending_robot_was_active is False
+
+
+def test_failed_checkpoint_recovery_keeps_robot_stopped_until_wifi_returns(
+    tmp_path,
+):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.client_activation_succeeds = False
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+    manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager.pending_connection = runner.active
+    manager.pending_ssid = "Unconfirmed B"
+    manager.pending_previous_connection = "Unavailable Facility A"
+    manager.pending_robot_was_active = True
+    manager.transition_phase = "pending_confirmation"
+
+    manager._checkpoint_expired(manager.pending_checkpoint)
+
+    assert runner.robot_active is False
+    assert manager.robot_restart_required is True
+    assert ["systemctl", "start", "my-bot-robot.service"] not in runner.commands
+    assert manager.transition_phase == "idle"
+
+
+def test_switch_from_facility_wifi_rolls_back_to_that_facility_wifi(tmp_path):
+    runner = FakeRunner()
+    runner.active = "Avocado Hotspot"
+    runner.address = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+    manager.staged_connection = facility_connection_name("Facility WiFi")
+    manager.staged_ssid = "Facility WiFi"
+    manager.staged_security = "wpa-psk"
+    scheduled = []
+    manager._schedule_robot_service_refresh = lambda **kwargs: scheduled.append(kwargs)
+
+    manager.activate("172.20.10.8")
+    manager.switch_timer.cancel()
+    manager.switch_timer = None
+    manager._start_checkpoint_switch()
+
+    checkpoint = manager.pending_checkpoint
+    manager.rollback_timer.cancel()
+    manager._checkpoint_expired(checkpoint)
+
+    assert runner.active == "Avocado Hotspot"
+    assert runner.address == "172.20.10.9/28"
+    assert not any(
+        command[:5] == ["nmcli", "--wait", "30", "connection", "up"]
+        and "intellitrolley-ap" in command
+        for command in runner.commands
+    )
+    assert scheduled == [{"ensure_running": True, "delay_s": 1.0}]
+    assert ["systemctl", "start", "my-bot-robot.service"] in runner.commands
+
+
+def test_explicit_previous_wifi_recovery_is_used_before_the_ap(tmp_path):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.connection_addresses["Facility A"] = "172.20.10.9/28"
+    manager = make_manager(tmp_path, runner)
+
+    restored = manager._restore_previous_connection("Facility A")
+
+    assert restored == "Facility A"
+    assert runner.active == "Facility A"
+    assert runner.address == "172.20.10.9/28"
+    assert not any(
+        "intellitrolley-ap" in command and "up" in command
+        for command in runner.commands
+    )
+
+
+def test_unconfirmed_target_is_never_accepted_as_the_recovery_fallback(tmp_path):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Unconfirmed B")
+    runner.address = "192.168.50.18/24"
+    runner.client_activation_succeeds = False
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+
+    restored = manager._restore_previous_connection("Unavailable Facility A")
+
+    assert restored == ""
+    assert manager.last_ready_signature is None
+    assert not manager.ready_state_path.exists()
+
+
+def test_recovery_ap_requires_its_exact_configured_address(tmp_path):
+    runner = FakeRunner()
+    runner.active = "intellitrolley-ap"
+    runner.address = "10.42.1.1/24"
+    runner.ap_activation_succeeds = False
+    manager = make_manager(tmp_path, runner)
+
+    restored = manager._restore_previous_connection("")
+
+    assert restored == ""
+    assert manager.last_ready_signature is None
+
+
+def test_failed_ready_state_write_remains_retryable(tmp_path):
+    manager = make_manager(tmp_path, FakeRunner())
+
+    def fail_ready_state(*args, **kwargs):
+        raise OSError("read-only ready-state directory")
+
+    manager._write_ready_state = fail_ready_state
+    restored = manager._record_restored_connection(
+        "intellitrolley-ap",
+        ipaddress.ip_interface("10.42.0.1/24"),
+    )
+
+    assert restored == "intellitrolley-ap"
+    assert manager.last_ready_signature is None
 
 
 def test_robot_service_refresh_starts_an_inactive_unit(tmp_path):
@@ -547,6 +1092,7 @@ def test_confirm_commits_checkpoint_and_updates_reciprocal_peer(tmp_path):
     manager.pending_checkpoint = (
         "/org/freedesktop/NetworkManager/Checkpoint/8"
     )
+    manager.transition_phase = "pending_confirmation"
     manager.staged_connection = runner.active
     manager.staged_ssid = "Facility WiFi"
     manager.staged_security = "wpa-psk"
@@ -571,6 +1117,86 @@ def test_confirm_commits_checkpoint_and_updates_reciprocal_peer(tmp_path):
     assert scheduled == [{"ensure_running": True, "delay_s": 2.0}]
 
 
+def test_confirmation_rejects_a_private_client_outside_target_subnet(tmp_path):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Facility WiFi")
+    runner.address = "192.168.40.18/24"
+    manager = make_manager(tmp_path, runner)
+    token = "target-subnet-token"
+    manager.pending_token_hash = __import__("hashlib").sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+    manager.pending_connection = runner.active
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_deadline = time.monotonic() + 120
+    manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager.transition_phase = "pending_confirmation"
+
+    with pytest.raises(ProvisioningError, match="active facility Wi-Fi"):
+        manager.confirm(remote_address="192.168.41.25", token=token)
+
+    assert manager.pending_checkpoint
+    assert not any("CheckpointDestroy" in command for command in runner.commands)
+
+
+def test_confirmation_commit_is_serialized_against_timeout_rollback(tmp_path):
+    runner = FakeRunner()
+    runner.active = facility_connection_name("Facility WiFi")
+    runner.address = "192.168.40.18/24"
+    manager = make_manager(tmp_path, runner)
+    token = "serialized-confirmation-token"
+    manager.pending_token_hash = __import__("hashlib").sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+    manager.pending_connection = runner.active
+    manager.pending_ssid = "Facility WiFi"
+    manager.pending_deadline = time.monotonic() + 120
+    manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager.transition_phase = "pending_confirmation"
+    manager._schedule_robot_service_refresh = lambda **kwargs: None
+
+    modify_started = threading.Event()
+    allow_modify = threading.Event()
+    original_run = runner.run
+
+    def blocking_run(command, *, timeout=15.0, check=True):
+        if command[:3] == ["nmcli", "connection", "modify"] and not modify_started.is_set():
+            modify_started.set()
+            assert allow_modify.wait(timeout=3)
+        return original_run(command, timeout=timeout, check=check)
+
+    runner.run = blocking_run
+    confirmed = []
+    confirm_errors = []
+
+    def run_confirm():
+        try:
+            confirmed.append(
+                manager.confirm(remote_address="192.168.40.25", token=token)
+            )
+        except Exception as exc:  # pragma: no cover - asserted below
+            confirm_errors.append(exc)
+
+    confirm_thread = threading.Thread(target=run_confirm)
+    confirm_thread.start()
+    assert modify_started.wait(timeout=3)
+    rollback_thread = threading.Thread(
+        target=manager._checkpoint_expired,
+        args=(manager.pending_checkpoint,),
+    )
+    rollback_thread.start()
+    allow_modify.set()
+    confirm_thread.join(timeout=3)
+    rollback_thread.join(timeout=3)
+
+    assert not confirm_thread.is_alive()
+    assert not rollback_thread.is_alive()
+    assert not confirm_errors
+    assert confirmed[0]["confirmed"] is True
+    assert manager.transition_phase == "idle"
+    assert not any("CheckpointRollback" in command for command in runner.commands)
+
+
 def test_confirmation_ignores_wall_clock_jump_after_internet_connects(
     tmp_path,
     monkeypatch,
@@ -587,6 +1213,7 @@ def test_confirmation_ignores_wall_clock_jump_after_internet_connects(
     manager.pending_ssid = "Facility WiFi"
     manager.pending_deadline = time.monotonic() + 120
     manager.pending_checkpoint = "/org/freedesktop/NetworkManager/Checkpoint/8"
+    manager.transition_phase = "pending_confirmation"
     manager._schedule_robot_service_refresh = lambda **kwargs: None
 
     monkeypatch.setattr(time, "time", lambda: 4_102_444_800.0)
@@ -686,6 +1313,8 @@ def test_provisioning_ui_never_places_password_in_query_or_storage():
     assert 'api("/api/select"' in javascript
     assert "profile.uuid" in javascript
     assert "startCountdown(body.timeout_s)" in javascript
+    assert "status.transition_phase" in javascript
+    assert 'elements.savedProfilesCard.classList.add("hidden")' in javascript
 
 
 def test_local_ui_preview_exercises_scan_switch_and_confirmation():
@@ -717,7 +1346,7 @@ def test_local_ui_preview_exercises_scan_switch_and_confirmation():
     assert confirmed["confirmed"] is True
 
 
-def test_http_ui_is_no_store_and_rejects_mutation_outside_ap(tmp_path):
+def test_http_ui_is_no_store_and_rejects_mutation_outside_active_wifi(tmp_path):
     manager = make_manager(tmp_path, FakeRunner())
     server = ProvisioningServer(
         ("127.0.0.1", 0),

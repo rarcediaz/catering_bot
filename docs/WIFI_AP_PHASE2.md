@@ -43,21 +43,28 @@ An intentional UI-driven Wi-Fi switch stops the ROS service before changing
 the address. The controller and Arduino command watchdogs stop motion while
 the service is down. After NetworkManager selects the new connection and
 assigns IPv4, ROS starts on that network while confirmation remains pending.
-Rollback stops ROS before restoring the hotspot, then starts it again on the
-hotspot. An ordinary transient loss of remote commands is still handled by the
-local safety timeouts.
+Rollback stops ROS before restoring the Wi-Fi that was active before the
+switch, then starts it again on that network. If the previous connection cannot
+be recovered, the provisioner starts the recovery hotspot instead. An ordinary
+transient loss of remote commands is still handled by the local safety timeouts.
 
 A facility switch uses NetworkManager's D-Bus checkpoint API. NetworkManager
-records the working AP state before activating the facility profile. The
+records the currently working Wi-Fi state before activating the new profile. The
 switch must be confirmed from the Linux or Windows operator computer on the new network
 within the configured timeout (180 seconds by default). If activation or
 confirmation fails, the provisioner explicitly rolls back the checkpoint and
-activates the AP if NetworkManager has not restored it. Confirmation and
+activates the AP only if the previous Wi-Fi cannot be restored. Confirmation and
 rollback use a monotonic timer, so acquiring internet and correcting the Pi's
 wall clock cannot expire a new switch. The D-Bus path is used because Ubuntu
 22.04's NetworkManager
 1.36 supports checkpoints but its `nmcli` frontend does not yet expose the
 newer `device checkpoint` subcommand.
+
+If the provisioning service itself restarts during an unconfirmed switch, the
+persisted pending state keeps the page read-only. The recovery monitor
+explicitly restores the previous Wi-Fi (or the exact recovery hotspot as a
+fallback), verifies its IPv4 address, and restarts the robot service before
+unlocking the controls.
 
 The confirmation request also:
 
@@ -85,8 +92,10 @@ separately reviewed administrator profile. Facility networks that isolate
 wireless clients or block multicast may also prevent ROS 2 and confirmation
 traffic.
 
-Mission Control currently assumes a trusted private robot/facility LAN. Do not
-place its unauthenticated test interface on a public or untrusted network.
+Mission Control and the Wi-Fi provisioning page currently assume a trusted
+private robot/facility LAN. The provisioning page uses plain HTTP and permits
+same-subnet peers; its request header is not user authentication. Do not expose
+either interface to a public or untrusted network.
 
 ## Prepare everything before changing the current Wi-Fi
 
@@ -166,10 +175,12 @@ This leaves the active hotspot and SSH session unchanged. Reboot explicitly
 after the build and installation are complete.
 
 The installer enables both `my-bot-network-ready.service` and
-`my-bot-wifi-provisioning.service`. Provisioning mutations remain locked unless:
-
-- `intellitrolley-ap` is the active `wlan0` connection; and
-- the request source belongs to `10.42.0.0/24`.
+`my-bot-wifi-provisioning.service`. Provisioning mutations remain locked unless
+the request source belongs to the IPv4 subnet currently active on `wlan0`.
+This permits the operator computer to save or switch networks from either a
+confirmed facility Wi-Fi or `intellitrolley-ap`, while rejecting source
+addresses outside the active `wlan0` IPv4 subnet. The AP-specific computer
+configuration action still requires `intellitrolley-ap` and `10.42.0.0/24`.
 
 ## Activate the recovery AP
 
@@ -203,7 +214,8 @@ service. The Pi stays on the AP throughout.
 
 ## Provision a facility network
 
-1. Open the provisioning page from the Linux or Windows operator computer.
+1. Open the provisioning page from a Linux or Windows operator computer on the
+   same active Wi-Fi network as the Pi.
 2. Scan and select the facility SSID from the visible nearby-network list, or
    type it exactly for a hidden network.
 3. Select Personal or Open security and enter the password if required.

@@ -49,6 +49,9 @@ class PreviewManager:
             "ap_connection": self.ap_connection,
             "ap_gateway": "10.42.0.1/24",
             "can_provision": True,
+            "using_recovery_ap": True,
+            "can_configure_ap": True,
+            "transition_phase": "idle",
             "staged": (
                 {"ssid": self.staged_ssid, "security": self.staged_security}
                 if self.staged_ssid

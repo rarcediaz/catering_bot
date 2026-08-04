@@ -14,8 +14,8 @@
           <p class="eyebrow">Raspberry Pi recovery network</p>
           <h1>IntelliTrolley Network Setup</h1>
           <p>
-            Save a facility Wi-Fi connection without leaving the robot hotspot.
-            The robot service already starts automatically on this hotspot;
+            Save a facility Wi-Fi connection from the network currently shared
+            by this computer and the Pi. The robot service starts automatically;
             nothing switches until you explicitly approve it.
           </p>
         </div>
@@ -40,7 +40,7 @@
         <strong>The robot hotspot remains the recovery path.</strong>
         <span>
           If the facility connection cannot be confirmed, NetworkManager
-          automatically restores the previous hotspot. A dropped client gets
+          automatically restores the previous Wi-Fi. A dropped client gets
           90 seconds to reconnect or move to another saved network first.
         </span>
       </div>
@@ -192,7 +192,7 @@
         <p>
           Connect this computer to <strong id="pending-ssid">the facility Wi-Fi</strong>,
           then open the link below. If it cannot be reached, wait for the Pi
-          hotspot to return.
+          to restore the previous Wi-Fi or its recovery hotspot.
         </p>
         <a class="confirm-link" id="confirm-link" href="#">Open confirmation page</a>
         <p class="countdown" id="rollback-countdown"></p>

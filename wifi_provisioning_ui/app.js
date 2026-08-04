@@ -104,12 +104,22 @@ async function refreshStatus() {
 
 function renderStatus() {
   const status = state.status || {};
+  const transitionActive = Boolean(
+    status.transition_phase && status.transition_phase !== "idle",
+  );
   elements.activeConnection.textContent = status.active_connection || "Unavailable";
   elements.interfaceAddress.textContent = status.interface_address || "No IPv4 address";
-  elements.provisioningAccess.textContent = status.can_provision
-    ? "Recovery hotspot"
-    : "Read-only";
-  elements.apCard.classList.toggle("hidden", !status.can_provision);
+  elements.provisioningAccess.textContent = transitionActive
+    ? "Wi-Fi change pending"
+    : status.can_provision
+      ? status.using_recovery_ap
+        ? "Recovery hotspot"
+        : "Active Wi-Fi"
+      : "Read-only";
+  elements.apCard.classList.toggle(
+    "hidden",
+    !status.can_configure_ap,
+  );
   elements.useApButton.disabled = !(
     status.can_provision && elements.apRobotStationary.checked
   );
@@ -126,6 +136,9 @@ function renderStatus() {
     elements.stagedSsid.textContent = staged.ssid;
   }
   renderSavedProfiles(status.saved_profiles || [], status.can_provision);
+  if (transitionActive || state.confirmationToken) {
+    elements.savedProfilesCard.classList.add("hidden");
+  }
 
   if (state.confirmationToken) {
     elements.confirmCard.classList.remove("hidden");
@@ -134,7 +147,19 @@ function renderStatus() {
     elements.switchCard.classList.add("hidden");
   }
 
-  if (status.last_result && !state.confirmationToken) {
+  if (transitionActive && !state.confirmationToken) {
+    setMessage(
+      elements.facilityMessage,
+      status.last_result || "A Wi-Fi recovery operation is in progress. Controls will return when it finishes.",
+      false,
+    );
+  } else if (!status.can_provision && !state.confirmationToken) {
+    setMessage(
+      elements.facilityMessage,
+      "Open this page from a computer on the same active Wi-Fi network as the Pi to make changes.",
+      true,
+    );
+  } else if (status.last_result && !state.confirmationToken) {
     setMessage(elements.facilityMessage, status.last_result, false);
   }
 }

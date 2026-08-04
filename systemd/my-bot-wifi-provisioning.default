@@ -1,8 +1,9 @@
 # Runtime settings for my-bot-wifi-provisioning.service.
 #
-# This service does not change networking on startup. Mutations are accepted
-# only while the recovery AP below is active and the request originates from
-# that AP subnet.
+# This service normally leaves networking unchanged on startup; if a prior
+# protected switch was interrupted, it first restores the previous Wi-Fi.
+# Mutations are accepted only from the IPv4 subnet currently active on the
+# interface below. AP-only actions remain restricted to the AP subnet.
 
 ROBOT_WIFI_INTERFACE=wlan0
 ROBOT_WIFI_AP_CONNECTION=intellitrolley-ap
