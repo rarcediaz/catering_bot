@@ -58,6 +58,18 @@ def test_production_launch_closure_has_no_central_compute_nodes():
     assert "executable='heartbeat_node.py'" not in combined
 
 
+def test_battery_voltage_is_calibrated_before_ros_publication():
+    ros2_control = read('description/ros2_control.xacro')
+
+    match = re.search(
+        r'<param name="battery_voltage_scale">([0-9.]+)</param>',
+        ros2_control,
+    )
+    assert match is not None
+    scale = float(match.group(1))
+    assert abs((27.959 * scale) - 23.5) < 0.01
+
+
 def test_manual_and_navigation_commands_both_pass_through_safety():
     safety = read('scripts/safety_node.py')
     mux = read('config/twist_mux.yaml')

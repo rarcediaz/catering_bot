@@ -13,6 +13,8 @@
       <param name="enc_counts_per_rev">3136</param>
       <param name="battery_topic">/battery_state</param>
       <param name="battery_poll_rate_hz">1.0</param>
+      <!-- Calibrated from 27.959 V reported at a measured pack voltage of 23.5 V. -->
+      <param name="battery_voltage_scale">0.8405165</param>
       <param name="battery_design_capacity_ah">6.0</param>
       <param name="battery_cell_count">6</param>
     </hardware>
