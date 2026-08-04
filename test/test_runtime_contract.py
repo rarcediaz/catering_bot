@@ -242,6 +242,25 @@ def test_rotation_counts_as_navigation_progress():
     assert re.search(r'movement_time_allowance:\s*30\.0\b', nav2)
 
 
+def test_mppi_retries_a_transient_invalid_batch_before_costmap_recovery():
+    nav2 = read('config/nav2_params.yaml')
+    behavior_tree = read(
+        'behavior_trees/navigate_to_pose_stable_replanning.xml'
+    )
+
+    # Two retries give MPPI one more chance to resample a valid, fully
+    # collision-checked trajectory before FollowPath invokes its existing
+    # local-costmap recovery.
+    assert re.search(r'retry_attempt_limit:\s*2\b', nav2)
+    assert re.search(
+        r'<RecoveryNode number_of_retries="1" name="FollowPath">\s*'
+        r'<FollowPath path="\{path\}" controller_id="FollowPath"/>\s*'
+        r'<ClearEntireCostmap name="ClearLocalCostmap-Context" '
+        r'service_name="local_costmap/clear_entirely_local_costmap"/>',
+        behavior_tree,
+    )
+
+
 def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     nav2 = read('config/nav2_params.yaml')
     controller_hz = float(

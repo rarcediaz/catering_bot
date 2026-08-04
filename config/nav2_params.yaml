@@ -185,7 +185,10 @@ controller_server:
       wz_max: 0.80
       temperature: 0.3
       gamma: 0.015
-      retry_attempt_limit: 1
+      # Give a transient all-invalid sample batch one extra resampling attempt
+      # before FollowPath aborts and the BT clears the local costmap. This does
+      # not relax footprint collision checks or suppress genuine recovery.
+      retry_attempt_limit: 2
       motion_model: "DiffDrive"
       visualize: false
       reset_period: 1.0
