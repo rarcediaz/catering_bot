@@ -426,6 +426,7 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
     assert re.search(r'repulsion_weight:\s*1\.0\b', obstacle_critic)
     assert re.search(r'cost_scaling_factor:\s*4\.0\b', obstacle_critic)
     assert re.search(r'inflation_radius:\s*0\.60\b', obstacle_critic)
+    assert nav2.count('footprint_padding: 0.08') == 2
     # Each costmap has ordinary obstacle inflation plus a second inflation
     # stage that runs after the keepout filter.
     assert inflation_radii == [0.60, 0.60, 0.60, 0.60]
@@ -445,6 +446,23 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
         '        plugin: "nav2_costmap_2d::InflationLayer"'
     ) == 2
     assert abs(inflation_radii[0] - (side_start + side_clearance)) <= 0.01
+
+
+def test_global_planner_uses_pi_compatible_differential_drive_primitives():
+    nav2 = read('config/nav2_params.yaml')
+    package = read('package.xml')
+
+    assert 'plugin: "nav2_smac_planner/SmacPlannerLattice"' in nav2
+    assert 'nav2_navfn_planner/NavfnPlanner' not in nav2
+    assert (
+        'lattice_filepath: "/opt/ros/humble/share/nav2_smac_planner/'
+        'sample_primitives/5cm_resolution/0.5m_turning_radius/diff/'
+        'output.json"'
+    ) in nav2
+    assert re.search(r'allow_reverse_expansion:\s*true\b', nav2)
+    assert re.search(r'rotation_penalty:\s*5\.0\b', nav2)
+    assert re.search(r'cost_penalty:\s*2\.0\b', nav2)
+    assert '<exec_depend>nav2_smac_planner</exec_depend>' in package
 
 
 def test_preferred_route_mask_is_a_separate_global_soft_cost_filter():

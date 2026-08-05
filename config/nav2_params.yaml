@@ -309,7 +309,9 @@ local_costmap:
       height: 5
       resolution: 0.05
       footprint: "[[-0.15, -0.305], [0.917, -0.305], [0.917, 0.305], [-0.15, 0.305]]"
-      footprint_padding: 0.04
+      # Keep the commanded footprint outside walls and keepout cells before
+      # the Pi's independent clearance filter has to intervene.
+      footprint_padding: 0.08
       plugins: ["voxel_layer", "inflation_layer"]
       filters: ["keepout_filter", "keepout_inflation_layer"]
       inflation_layer:
@@ -372,7 +374,7 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: False
       footprint: "[[-0.15, -0.305], [0.917, -0.305], [0.917, 0.305], [-0.15, 0.305]]"
-      footprint_padding: 0.04
+      footprint_padding: 0.08
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -404,10 +406,10 @@ global_costmap:
         filter_info_topic: "/costmap_filter_info"
       keepout_inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # Apply the same clearance field after the keepout mask so NavFn does
-        # not route the robot center along an uninflated keepout boundary. The
-        # steeper decay keeps the hard boundary and outer awareness radius but
-        # gives the global planner more usable width in a clear aisle.
+        # Apply the same clearance field after the keepout mask so the planner
+        # does not route the robot center along an uninflated keepout boundary.
+        # The steeper decay keeps the hard boundary and outer awareness radius
+        # but gives the global planner more usable width in a clear aisle.
         cost_scaling_factor: 5.0
         inflation_radius: 0.60
       preferred_filter:
@@ -420,7 +422,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # Use the same clearance model as local control and Pi side safety so
-        # NavFn may choose a narrow route when it is the cleanest valid path.
+        # the planner may choose a narrow route when it is the cleanest valid
+        # path.
         # Inflation remains a preference; the padded footprint is the hard
         # geometric collision boundary.
         cost_scaling_factor: 4.0
@@ -448,10 +451,29 @@ planner_server:
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
+      # The differential-drive lattice checks the trolley's full rectangular
+      # footprint while searching. Its primitive set contains curved travel
+      # and in-place rotations, while the penalties retain a preference for
+      # forward, non-rotating motion when either route is viable.
+      plugin: "nav2_smac_planner/SmacPlannerLattice"
       tolerance: 0.25
-      use_astar: true
       allow_unknown: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      reverse_penalty: 2.0
+      change_penalty: 0.05
+      non_straight_penalty: 1.05
+      cost_penalty: 2.0
+      rotation_penalty: 5.0
+      retrospective_penalty: 0.015
+      lattice_filepath: "/opt/ros/humble/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json"
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      allow_reverse_expansion: true
+      smooth_path: true
 
 smoother_server:
   ros__parameters:
