@@ -16,6 +16,12 @@ def generate_launch_description():
     side_hard_stop_distance_m = LaunchConfiguration('side_hard_stop_distance_m')
     side_min_speed_scale = LaunchConfiguration('side_min_speed_scale')
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
+    turn_in_place_linear_threshold_mps = LaunchConfiguration(
+        'turn_in_place_linear_threshold_mps'
+    )
+    turn_in_place_angular_threshold_radps = LaunchConfiguration(
+        'turn_in_place_angular_threshold_radps'
+    )
     nav_timeout_sec = LaunchConfiguration('nav_timeout_sec')
     nav_stop_hold_sec = LaunchConfiguration('nav_stop_hold_sec')
     scan_timeout_sec = LaunchConfiguration('scan_timeout_sec')
@@ -39,6 +45,8 @@ def generate_launch_description():
             'side_hard_stop_distance_m': side_hard_stop_distance_m,
             'side_min_speed_scale': side_min_speed_scale,
             'side_stop_start_y_m': side_stop_start_y_m,
+            'turn_in_place_linear_threshold_mps': turn_in_place_linear_threshold_mps,
+            'turn_in_place_angular_threshold_radps': turn_in_place_angular_threshold_radps,
             'nav_timeout_sec': nav_timeout_sec,
             'nav_stop_hold_sec': nav_stop_hold_sec,
             'scan_timeout_sec': scan_timeout_sec,
@@ -121,6 +129,22 @@ def generate_launch_description():
             'side_stop_start_y_m',
             default_value='0.34',
             description='Distance from lidar centerline to the robot side edge in meters.'
+        ),
+        DeclareLaunchArgument(
+            'turn_in_place_linear_threshold_mps',
+            default_value='0.05',
+            description=(
+                'Maximum Nav2 linear speed converted to zero during a '
+                'rotation-dominant command.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'turn_in_place_angular_threshold_radps',
+            default_value='0.20',
+            description=(
+                'Minimum Nav2 angular speed required to normalize a '
+                'near-zero-linear command as an in-place turn.'
+            )
         ),
         DeclareLaunchArgument(
             'scan_topic',

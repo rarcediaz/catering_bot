@@ -144,6 +144,8 @@ class Nav2StartupGate(Node):
             '/lifecycle_manager_navigation/manage_nodes',
         )
         self.declare_parameter('retry_period_s', 2.0)
+        self.declare_parameter('required_valid_samples', 3)
+        self.declare_parameter('required_invalid_samples', 3)
 
         localization_topic = str(
             self.get_parameter('localization_topic').value
@@ -155,6 +157,14 @@ class Nav2StartupGate(Node):
         )
         manager_service = str(self.get_parameter('manager_service').value)
         retry_period_s = float(self.get_parameter('retry_period_s').value)
+        self._required_valid_samples = max(
+            1,
+            int(self.get_parameter('required_valid_samples').value),
+        )
+        self._required_invalid_samples = max(
+            1,
+            int(self.get_parameter('required_invalid_samples').value),
+        )
 
         localization_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -173,6 +183,8 @@ class Nav2StartupGate(Node):
         self._keepout_map = None
         self._pending_pose = None
         self._last_rejection = None
+        self._valid_samples = 0
+        self._invalid_samples = 0
         self._startup_in_progress = False
         self._startup_complete = False
         self._startup_authorization_revoked = False
@@ -209,19 +221,28 @@ class Nav2StartupGate(Node):
 
     def _handle_map(self, message: OccupancyGrid) -> None:
         self._navigation_map = message
-        self._validate_pending_pose()
+        if not self._startup_complete:
+            # A revised physical map invalidates confirmation accumulated
+            # against the previous layer. Only fresh AMCL samples may restore
+            # authorization; replaying this latched pose must never count.
+            self._localized = False
+            self._valid_samples = 0
+        self._validate_pending_pose(count_sample=False)
 
     def _handle_keepout(self, message: OccupancyGrid) -> None:
         self._keepout_map = message
-        self._validate_pending_pose()
+        if not self._startup_complete:
+            self._localized = False
+            self._valid_samples = 0
+        self._validate_pending_pose(count_sample=False)
 
     def _handle_localization(self, message: PoseWithCovarianceStamped) -> None:
         if self._startup_complete:
             return
         self._pending_pose = message
-        self._validate_pending_pose()
+        self._validate_pending_pose(count_sample=True)
 
-    def _validate_pending_pose(self) -> None:
+    def _validate_pending_pose(self, *, count_sample: bool) -> None:
         if self._startup_complete or self._pending_pose is None:
             return
         fault = localization_maps_fault(
@@ -231,20 +252,66 @@ class Nav2StartupGate(Node):
             self._require_keepout,
         )
         if fault:
+            # The latest pose must immediately block a *new* lifecycle start.
+            # Requiring several invalid AMCL samples applies only to revoking
+            # an already in-flight STARTUP and forcing a costly RESET.
             self._localized = False
-            if (
-                self._startup_in_progress
-                and self._lifecycle_operation == 'startup'
-            ):
-                # A later valid pose must not rescue an in-flight request that
-                # was unsafe at any point. Let it finish, RESET it if it
-                # succeeded, then start again from a continuously valid pose.
-                self._startup_authorization_revoked = True
-            if fault != self._last_rejection:
+            self._valid_samples = 0
+            # Missing map layers are startup dependencies rather than AMCL
+            # evidence. Count only fresh pose samples checked against every
+            # required map so one latched pose is never counted repeatedly as
+            # map and keepout topics arrive.
+            maps_ready = bool(
+                self._navigation_map is not None
+                and (not self._require_keepout or self._keepout_map is not None)
+            )
+            threshold_crossed = False
+            if count_sample and maps_ready:
+                self._invalid_samples += 1
+                threshold_crossed = (
+                    self._invalid_samples == self._required_invalid_samples
+                )
+            if self._invalid_samples >= self._required_invalid_samples:
+                if (
+                    self._startup_in_progress
+                    and self._lifecycle_operation == 'startup'
+                ):
+                    # A persistently invalid pose revokes an in-flight startup.
+                    # A single edge-cell flicker does not force a costly Nav2
+                    # lifecycle reset.
+                    self._startup_authorization_revoked = True
+            if threshold_crossed:
+                threshold_message = (
+                    ' In-flight navigation startup authorization is revoked.'
+                    if self._startup_in_progress
+                    and self._lifecycle_operation == 'startup'
+                    else ' Navigation startup remains blocked.'
+                )
                 self.get_logger().warning(
-                    f'AMCL pose not accepted: {fault}. Navigation remains locked.'
+                    'AMCL pose remained invalid for '
+                    f'{self._invalid_samples} consecutive samples.'
+                    f'{threshold_message}'
+                )
+            elif fault != self._last_rejection:
+                self.get_logger().warning(
+                    f'AMCL pose not accepted: {fault}. Waiting for '
+                    f'{self._required_invalid_samples} consecutive invalid or '
+                    f'{self._required_valid_samples} consecutive map-free samples.'
                 )
                 self._last_rejection = fault
+            return
+
+        self._invalid_samples = 0
+        if count_sample:
+            self._valid_samples += 1
+        if self._valid_samples < self._required_valid_samples:
+            if self._last_rejection != 'confirming map-free pose':
+                self.get_logger().info(
+                    'AMCL footprint is map-free; waiting for consecutive '
+                    f'confirmation ({self._valid_samples}/'
+                    f'{self._required_valid_samples}).'
+                )
+                self._last_rejection = 'confirming map-free pose'
             return
 
         newly_localized = not self._localized

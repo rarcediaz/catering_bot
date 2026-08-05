@@ -94,6 +94,14 @@ The Pi preserves a 0.08 m hard-stop boundary for an imminent side-sweep
 collision. Turns away from the obstacle are not reduced, and the front/rear
 collision stops remain fail-closed.
 
+Nav2 rotation-dominant commands are normalized to the same safety path as a
+recovery spin. When autonomous linear speed is at most 0.05 m/s and angular
+speed is at least 0.20 rad/s, the Pi forces translation to zero and applies the
+existing side-sweep limiter to the turn. This prevents MPPI's few-centimeters-
+per-second sampling noise from converting a safe normal-driving turn into an
+arc that a front or rear obstacle stop must reject. Manual commands are not
+normalized, and faster autonomous arcs retain full front/rear protection.
+
 Front and rear clearance limits preserve Nav2's collision-checked curvature:
 when a translating arc must slow, the Pi applies the same scale to its linear
 and angular components. A hard front/rear stop therefore stops the entire arc

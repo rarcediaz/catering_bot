@@ -266,6 +266,29 @@ def test_rotation_counts_as_progress_and_stationary_stalls_recover_promptly():
     assert re.search(r'movement_time_allowance:\s*10\.0\b', nav2)
 
 
+def test_normal_path_tracking_may_choose_a_footprint_checked_in_place_turn():
+    nav2 = read('config/nav2_params.yaml')
+
+    # DiffDrive MPPI has no minimum commanded linear speed and samples enough
+    # angular spread to compare an in-place turn against arcs and reverse.
+    assert re.search(r'motion_model:\s*"DiffDrive"', nav2)
+    assert re.search(r'vx_std:\s*0\.25\b', nav2)
+    assert re.search(r'wz_std:\s*0\.65\b', nav2)
+    assert re.search(r'wz_max:\s*0\.80\b', nav2)
+    assert re.search(r'max_angle_to_furthest:\s*0\.75\b', nav2)
+    assert not re.search(r'^\s+TwirlingCritic:', nav2, re.MULTILINE)
+
+    # Selection remains bounded by the asymmetric trolley footprint. Final
+    # orientation is still irrelevant, so this cannot add a goal-heading spin.
+    assert nav2.count('consider_footprint: true') == 1
+    assert nav2.count(
+        'footprint: "[[-0.15, -0.305], [0.917, -0.305], '
+        '[0.917, 0.305], [-0.15, 0.305]]"'
+    ) == 2
+    assert 'plugin: "nav2_controller::PositionGoalChecker"' in nav2
+    assert 'RotationShimController' not in nav2
+
+
 def test_mppi_retries_a_transient_invalid_batch_before_costmap_recovery():
     nav2 = read('config/nav2_params.yaml')
     behavior_tree = read(
@@ -511,6 +534,13 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     assert 'def get_side_turn_scale' in safety
     assert "declare_parameter('side_hard_stop_distance_m', 0.08)" in safety
     assert "declare_parameter('side_min_speed_scale', 0.25)" in safety
+    assert "declare_parameter('turn_in_place_linear_threshold_mps', 0.05)" in safety
+    assert (
+        "declare_parameter('turn_in_place_angular_threshold_radps', 0.20)"
+        in safety
+    )
+    assert 'def apply_navigation_motion_constraints' in safety
+    assert "return 'turn_in_place'" in safety
     assert "return 'left_turn_slowdown'" in safety
     assert "return 'right_turn_slowdown'" in safety
     assert 'closest_forward_clearance' in safety
@@ -535,6 +565,14 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
         )
         assert re.search(
             r"'side_hard_stop_distance_m',\s*default_value='0\.08'",
+            launch,
+        )
+        assert re.search(
+            r"'turn_in_place_linear_threshold_mps',\s*default_value='0\.05'",
+            launch,
+        )
+        assert re.search(
+            r"'turn_in_place_angular_threshold_radps',\s*default_value='0\.20'",
             launch,
         )
 

@@ -177,10 +177,13 @@ controller_server:
       batch_size: 1000
       iteration_count: 1
       # Explore decisive translation and rotation without allowing sampled
-      # commands beyond the physical navigation envelope.
+      # commands beyond the physical navigation envelope. The wider angular
+      # distribution deliberately includes low-linear-speed, high-yaw-rate
+      # candidates so MPPI may choose an in-place turn during normal path
+      # tracking when that is safer than sweeping the trolley through an arc.
       vx_std: 0.25
       vy_std: 0.0
-      wz_std: 0.50
+      wz_std: 0.65
       # Keep autonomous travel below the 0.70 m/s hardware ceiling so the
       # front lidar gets more scans of thin chair legs before contact.
       vx_max: 0.50
@@ -206,7 +209,9 @@ controller_server:
       # Prefer the front-lidar-covered direction for normal route travel while
       # retaining finite-cost reverse as a short escape/repositioning option.
       # There is no GoalAngleCritic because catering stops are positions and
-      # must not trigger a final heading spin.
+      # must not trigger a final heading spin. There is deliberately no
+      # TwirlingCritic: angular-only trajectories remain valid normal-driving
+      # candidates and are still collision-scored using the full footprint.
       critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic", "FinalApproachDirectionCritic"]
       ConstraintCritic:
         enabled: true
@@ -258,7 +263,10 @@ controller_server:
         cost_weight: 2.0
         offset_from_furthest: 4
         threshold_to_consider: 0.5
-        max_angle_to_furthest: 0.90
+        # Start scoring rotation-dominant trajectories once the usable path is
+        # roughly 43 degrees away. This does not force a spin: MPPI may still
+        # select a footprint-safe arc or reverse when it has the lower cost.
+        max_angle_to_furthest: 0.75
         # Humble's bidirectional mode compares forward and mirrored headings,
         # allowing MPPI to select the shorter collision-checked direction.
         forward_preference: false

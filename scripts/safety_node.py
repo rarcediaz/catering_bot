@@ -27,6 +27,8 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('side_hard_stop_distance_m', 0.08)
         self.declare_parameter('side_min_speed_scale', 0.25)
         self.declare_parameter('side_stop_start_y_m', 0.34)
+        self.declare_parameter('turn_in_place_linear_threshold_mps', 0.05)
+        self.declare_parameter('turn_in_place_angular_threshold_radps', 0.20)
         self.declare_parameter('joystick_timeout_sec', 0.25)
         # Navigation crosses Wi-Fi/DDS. Keep enough jitter margin to bridge a
         # short network pause while this Pi-local node continues enforcing
@@ -63,6 +65,14 @@ class ObstacleSafetyNode(Node):
             min(float(self.get_parameter('side_min_speed_scale').value), 1.0),
         )
         self.side_stop_start_y_m = float(self.get_parameter('side_stop_start_y_m').value)
+        self.turn_in_place_linear_threshold_mps = max(
+            0.0,
+            float(self.get_parameter('turn_in_place_linear_threshold_mps').value),
+        )
+        self.turn_in_place_angular_threshold_radps = max(
+            0.0,
+            float(self.get_parameter('turn_in_place_angular_threshold_radps').value),
+        )
         self.joystick_timeout_sec = float(self.get_parameter('joystick_timeout_sec').value)
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
         self.nav_stop_hold_sec = float(self.get_parameter('nav_stop_hold_sec').value)
@@ -312,7 +322,7 @@ class ObstacleSafetyNode(Node):
             self.nav_gate_pub.publish(Twist())
             self.safety_cmd_pub.publish(Twist())
             return
-        self.nav_gate_pub.publish(self.apply_motion_constraints(msg))
+        self.nav_gate_pub.publish(self.apply_navigation_motion_constraints(msg))
 
     def odom_callback(self, msg):
         self.forward_speed_mps = msg.twist.twist.linear.x
@@ -388,11 +398,32 @@ class ObstacleSafetyNode(Node):
             self.rear_speed_limit_scale < 1.0
         )
 
-    def apply_motion_constraints(self, cmd):
+    def is_navigation_turn_in_place(self, cmd):
+        """Identify MPPI's near-zero translation commands as normal turns."""
+        return (
+            abs(cmd.linear.x) <= self.turn_in_place_linear_threshold_mps and
+            abs(cmd.angular.z) >= self.turn_in_place_angular_threshold_radps
+        )
+
+    def apply_navigation_motion_constraints(self, cmd):
+        return self.apply_motion_constraints(
+            cmd,
+            normalize_turn_in_place=self.is_navigation_turn_in_place(cmd),
+        )
+
+    def apply_motion_constraints(self, cmd, normalize_turn_in_place=False):
         if not self.startup_gate_open or not self.is_scan_healthy():
             return Twist()
         limited = self.copy_twist(cmd)
         translation_scale = 1.0
+
+        # MPPI samples continuous linear velocity, so an otherwise valid
+        # in-place turn commonly arrives with a few cm/s of translation. Make
+        # that Nav2-only command identical to a recovery spin before applying
+        # the same Pi-local side-sweep protection. Manual commands retain their
+        # requested curvature, and faster arcs still use front/rear limits.
+        if normalize_turn_in_place:
+            limited.linear.x = 0.0
 
         if self.front_obstacle_active and limited.linear.x > 0.0:
             translation_scale = 0.0
@@ -418,7 +449,7 @@ class ObstacleSafetyNode(Node):
         # whenever front/rear clearance limits a translating command. Pure
         # rotation commands remain governed by the independent side envelopes.
         limited.linear.x *= translation_scale
-        if abs(cmd.linear.x) > self.command_epsilon:
+        if not normalize_turn_in_place and abs(cmd.linear.x) > self.command_epsilon:
             limited.angular.z *= translation_scale
 
         side_turn_scale = 1.0
@@ -433,7 +464,7 @@ class ObstacleSafetyNode(Node):
         # carry the trolley footprint into occupied/keepout cells. Scale the
         # complete twist for a translating arc; for a pure rotation, only the
         # angular component exists to constrain.
-        if abs(cmd.linear.x) > self.command_epsilon:
+        if not normalize_turn_in_place and abs(cmd.linear.x) > self.command_epsilon:
             limited.linear.x *= side_turn_scale
             limited.angular.z *= side_turn_scale
         else:
@@ -446,6 +477,26 @@ class ObstacleSafetyNode(Node):
             return 'startup_gate'
         if not self.is_scan_healthy():
             return 'scan_stale'
+        if self.is_navigation_turn_in_place(raw_cmd):
+            if (
+                raw_cmd.angular.z > self.command_epsilon and
+                safe_cmd.angular.z < raw_cmd.angular.z - self.command_epsilon
+            ):
+                if abs(safe_cmd.angular.z) <= self.command_epsilon:
+                    return 'left_turn_stop'
+                return 'left_turn_slowdown'
+            if (
+                raw_cmd.angular.z < -self.command_epsilon and
+                safe_cmd.angular.z > raw_cmd.angular.z + self.command_epsilon
+            ):
+                if abs(safe_cmd.angular.z) <= self.command_epsilon:
+                    return 'right_turn_stop'
+                return 'right_turn_slowdown'
+            if (
+                abs(raw_cmd.linear.x) > self.command_epsilon and
+                abs(safe_cmd.linear.x) <= self.command_epsilon
+            ):
+                return 'turn_in_place'
         if raw_cmd.linear.x > self.command_epsilon:
             if self.front_obstacle_active:
                 return 'front_stop'
@@ -568,7 +619,9 @@ class ObstacleSafetyNode(Node):
             # Re-publish at the Pi-local 20 Hz safety rate. During a brief DDS
             # gap this keeps the downstream mux/controller fed while every
             # command is still constrained by the latest local lidar scan.
-            safe_nav_cmd = self.apply_motion_constraints(self.latest_nav_cmd)
+            safe_nav_cmd = self.apply_navigation_motion_constraints(
+                self.latest_nav_cmd
+            )
             self.nav_gate_pub.publish(safe_nav_cmd)
         else:
             self.nav_gate_pub.publish(Twist())
@@ -599,7 +652,13 @@ class ObstacleSafetyNode(Node):
             return
 
         if self.has_active_motion_constraints():
-            self.safety_cmd_pub.publish(self.apply_motion_constraints(active_cmd))
+            if joy_active:
+                safe_active_cmd = self.apply_motion_constraints(active_cmd)
+            else:
+                safe_active_cmd = self.apply_navigation_motion_constraints(
+                    active_cmd
+                )
+            self.safety_cmd_pub.publish(safe_active_cmd)
 
         self.speed_limit_scale_pub.publish(Float32(data=float(self.speed_limit_scale)))
         self.rear_speed_limit_scale_pub.publish(
@@ -715,7 +774,9 @@ class ObstacleSafetyNode(Node):
         )))
 
         if self.is_nav_active():
-            self.nav_gate_pub.publish(self.apply_motion_constraints(self.latest_nav_cmd))
+            self.nav_gate_pub.publish(
+                self.apply_navigation_motion_constraints(self.latest_nav_cmd)
+            )
         if self.is_joy_active():
             self.joy_gate_pub.publish(self.apply_motion_constraints(self.latest_joy_cmd))
             self.joy_was_active = True

@@ -32,6 +32,8 @@ def make_safety_node(scan_healthy=True):
     node.side_stop_distance_m = 0.25
     node.side_hard_stop_distance_m = 0.08
     node.side_min_speed_scale = 0.25
+    node.turn_in_place_linear_threshold_mps = 0.05
+    node.turn_in_place_angular_threshold_radps = 0.20
     node.command_epsilon = 0.005
     node.nav_constraint_reason = ''
     node.is_scan_healthy = lambda: scan_healthy
@@ -93,6 +95,53 @@ def test_front_obstacle_blocks_forward_but_allows_reverse():
 
     # A front stop does not prohibit a separately collision-checked pure turn.
     assert node.apply_motion_constraints(make_command(angular=0.5)).angular.z == 0.5
+
+
+def test_navigation_near_zero_arc_becomes_a_side_checked_in_place_turn():
+    node = make_safety_node()
+    node.front_obstacle_active = True
+    node.rear_obstacle_active = True
+
+    raw = make_command(0.03, -0.50)
+    safe = node.apply_navigation_motion_constraints(raw)
+
+    assert safe.linear.x == 0.0
+    assert safe.angular.z == -0.50
+    assert node.get_nav_constraint_reason(raw, safe) == 'turn_in_place'
+
+    node.right_turn_scale = 0.5
+    side_limited = node.apply_navigation_motion_constraints(raw)
+    assert side_limited.linear.x == 0.0
+    assert side_limited.angular.z == -0.25
+    assert node.get_nav_constraint_reason(
+        raw, side_limited
+    ) == 'right_turn_slowdown'
+
+    reverse_raw = make_command(-0.03, 0.50)
+    reverse_safe = node.apply_navigation_motion_constraints(reverse_raw)
+    assert reverse_safe.linear.x == 0.0
+    assert reverse_safe.angular.z == 0.50
+
+
+def test_turn_normalization_does_not_change_manual_or_translating_arcs():
+    node = make_safety_node()
+    node.front_obstacle_active = True
+
+    manual = node.apply_motion_constraints(make_command(0.03, -0.50))
+    assert manual.linear.x == 0.0
+    assert manual.angular.z == 0.0
+
+    translating_arc = node.apply_navigation_motion_constraints(
+        make_command(0.06, -0.50)
+    )
+    assert translating_arc.linear.x == 0.0
+    assert translating_arc.angular.z == 0.0
+
+    low_angular_arc = node.apply_navigation_motion_constraints(
+        make_command(0.03, -0.10)
+    )
+    assert low_angular_arc.linear.x == 0.0
+    assert low_angular_arc.angular.z == 0.0
 
 
 def test_front_slowdown_scales_only_forward_motion():
