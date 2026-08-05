@@ -257,13 +257,13 @@ def test_final_approach_preserves_the_established_travel_direction():
     assert 'mppi::critics::FinalApproachDirectionCritic' in plugin_xml
 
 
-def test_rotation_counts_as_navigation_progress():
+def test_rotation_counts_as_progress_and_stationary_stalls_recover_promptly():
     nav2 = read('config/nav2_params.yaml')
 
     assert 'plugin: "nav2_controller::PoseProgressChecker"' in nav2
     assert re.search(r'required_movement_radius:\s*0\.05\b', nav2)
     assert re.search(r'required_movement_angle:\s*0\.15\b', nav2)
-    assert re.search(r'movement_time_allowance:\s*30\.0\b', nav2)
+    assert re.search(r'movement_time_allowance:\s*10\.0\b', nav2)
 
 
 def test_mppi_retries_a_transient_invalid_batch_before_costmap_recovery():
@@ -313,7 +313,7 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     assert 'dwb_core::DWBLocalPlanner' not in nav2
     assert 'RotationShimController' not in nav2
     assert re.search(
-        r'critics:\s*\["ConstraintCritic", "CostCritic", "GoalCritic", '
+        r'critics:\s*\["ConstraintCritic", "ObstaclesCritic", "GoalCritic", '
         r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic", '
         r'"PreferForwardCritic", "FinalApproachDirectionCritic"\]',
         nav2,
@@ -366,13 +366,16 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
 def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
     nav2 = read('config/nav2_params.yaml')
     safety = read('scripts/safety_node.py')
+    costmaps = nav2[
+        nav2.index('\nlocal_costmap:'):nav2.index('\nmap_server:')
+    ]
     inflation_radii = [
         float(value)
-        for value in re.findall(r'inflation_radius:\s*([0-9.]+)', nav2)
+        for value in re.findall(r'inflation_radius:\s*([0-9.]+)', costmaps)
     ]
     inflation_scales = [
         float(value)
-        for value in re.findall(r'cost_scaling_factor:\s*([0-9.]+)', nav2)
+        for value in re.findall(r'cost_scaling_factor:\s*([0-9.]+)', costmaps)
     ]
     side_start = float(
         re.search(
@@ -387,11 +390,19 @@ def test_navigation_scores_the_rectangular_footprint_with_safety_clearance():
         ).group(1)
     )
 
-    assert '"CostCritic"' in nav2
-    assert re.search(r'consider_footprint:\s*true\b', nav2)
-    assert re.search(r'collision_cost:\s*1000000\.0\b', nav2)
-    assert re.search(r'cost_weight:\s*2\.5\b', nav2)
-    assert re.search(r'inflation_layer_name:\s*"inflation_layer"', nav2)
+    obstacle_critic = re.search(
+        r'^\s+ObstaclesCritic:\n(?P<body>.*?)^\s+GoalCritic:',
+        nav2,
+        re.MULTILINE | re.DOTALL,
+    ).group('body')
+    assert '"CostCritic"' not in nav2
+    assert re.search(r'consider_footprint:\s*true\b', obstacle_critic)
+    assert re.search(r'collision_cost:\s*1000000\.0\b', obstacle_critic)
+    assert re.search(r'collision_margin_distance:\s*0\.20\b', obstacle_critic)
+    assert re.search(r'critical_weight:\s*20\.0\b', obstacle_critic)
+    assert re.search(r'repulsion_weight:\s*1\.0\b', obstacle_critic)
+    assert re.search(r'cost_scaling_factor:\s*4\.0\b', obstacle_critic)
+    assert re.search(r'inflation_radius:\s*0\.60\b', obstacle_critic)
     # Each costmap has ordinary obstacle inflation plus a second inflation
     # stage that runs after the keepout filter.
     assert inflation_radii == [0.60, 0.60, 0.60, 0.60]
@@ -432,15 +443,18 @@ def test_preferred_route_mask_is_a_separate_global_soft_cost_filter():
 
 def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
     nav2 = read('config/nav2_params.yaml')
+    costmaps = nav2[
+        nav2.index('\nlocal_costmap:'):nav2.index('\nmap_server:')
+    ]
 
     # Local control only bridges a missed scan so stale returns cannot trap
     # MPPI. The global planner retains the longer memory needed to route around
     # intermittent chair-leg returns. This does not widen inflation.
     assert nav2.count('observation_persistence: 0.20') == 1
     assert nav2.count('observation_persistence: 0.75') == 1
-    assert nav2.count('inflation_radius: 0.60') == 4
-    assert nav2.count('cost_scaling_factor: 4.0') == 2
-    assert nav2.count('cost_scaling_factor: 5.0') == 2
+    assert costmaps.count('inflation_radius: 0.60') == 4
+    assert costmaps.count('cost_scaling_factor: 4.0') == 2
+    assert costmaps.count('cost_scaling_factor: 5.0') == 2
 
 
 def test_normal_navigation_can_reverse_safely_and_replans_stably():

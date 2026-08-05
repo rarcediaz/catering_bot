@@ -153,7 +153,11 @@ controller_server:
       plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.05
       required_movement_angle: 0.15
-      movement_time_allowance: 30.0
+      # Do not leave a truly stationary controller waiting through two
+      # 30-second FollowPath attempts. A valid slow turn still resets this
+      # timer after 0.15 rad, while a stall now clears the local costmap after
+      # 10 seconds and can reach broader recovery after roughly 20 seconds.
+      movement_time_allowance: 10.0
     # Goal checker parameters
     general_goal_checker:
       stateful: True
@@ -203,22 +207,30 @@ controller_server:
       # retaining finite-cost reverse as a short escape/repositioning option.
       # There is no GoalAngleCritic because catering stops are positions and
       # must not trigger a final heading spin.
-      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic", "FinalApproachDirectionCritic"]
+      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic", "FinalApproachDirectionCritic"]
       ConstraintCritic:
         enabled: true
         cost_power: 1
         cost_weight: 4.0
-      CostCritic:
+      ObstaclesCritic:
         enabled: true
         cost_power: 1
-        # Let the controller use safe narrow passages without weakening exact
-        # footprint collision rejection or the independent Pi safety layer.
-        cost_weight: 2.5
-        critical_cost: 300.0
+        # Score clearance from the full asymmetric trolley footprint instead
+        # of the axle-center cost used by CostCritic. The 0.20 m critical
+        # margin covers the Pi's measured front/side stop envelope and comes
+        # within one 0.05 m costmap cell of its 0.21 m rear envelope. It is a
+        # trajectory preference, not a hard global keepout: a narrow route can
+        # still be used when no safer local arc exists.
         consider_footprint: true
+        repulsion_weight: 1.0
+        critical_weight: 20.0
         collision_cost: 1000000.0
+        collision_margin_distance: 0.20
         near_goal_distance: 0.5
-        inflation_layer_name: "inflation_layer"
+        # Humble's ObstaclesCritic needs these to match the ordinary local
+        # inflation layer when converting inflated cost back to clearance.
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.60
       GoalCritic:
         enabled: true
         cost_power: 1
