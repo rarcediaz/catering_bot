@@ -11,6 +11,7 @@ from sensor_msgs.msg import LaserScan
 
 FULL_SCAN_MINIMUM_SPAN_RAD = math.radians(350.0)
 SAMPLE_COUNT_TOLERANCE = 0.05
+MINIMUM_SCAN_RAY_COUNT = 600
 
 
 def has_duplicate_full_circle_endpoint(scan: LaserScan) -> bool:
@@ -46,7 +47,13 @@ def canonicalize_scan(scan: LaserScan) -> LaserScan:
 class ScanCanonicalizer(Node):
     def __init__(self) -> None:
         super().__init__('scan_canonicalizer')
+        self.declare_parameter('minimum_scan_ray_count', MINIMUM_SCAN_RAY_COUNT)
+        self._minimum_scan_ray_count = max(
+            1,
+            int(self.get_parameter('minimum_scan_ray_count').value),
+        )
         self._reported_correction = False
+        self._dropping_partial_scan = False
         self._publisher = self.create_publisher(
             LaserScan,
             'scan_canonical',
@@ -60,6 +67,22 @@ class ScanCanonicalizer(Node):
         )
 
     def _scan_callback(self, scan: LaserScan) -> None:
+        if len(scan.ranges) < self._minimum_scan_ray_count:
+            if not self._dropping_partial_scan:
+                self.get_logger().warning(
+                    'Dropping incomplete LaserScan with '
+                    f'{len(scan.ranges)} rays; at least '
+                    f'{self._minimum_scan_ray_count} are required.'
+                )
+            self._dropping_partial_scan = True
+            return
+
+        if self._dropping_partial_scan:
+            self.get_logger().info(
+                'Complete LaserScan stream recovered; publishing resumed.'
+            )
+            self._dropping_partial_scan = False
+
         canonical = canonicalize_scan(scan)
         if len(canonical.ranges) != len(scan.ranges) and not self._reported_correction:
             self.get_logger().info(

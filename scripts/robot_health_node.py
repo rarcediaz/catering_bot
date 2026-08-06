@@ -18,7 +18,10 @@ class RobotHealthNode(Node):
 
         self.declare_parameter('stream_timeout_sec', 1.0)
         self.declare_parameter('startup_grace_sec', 15.0)
-        self.declare_parameter('minimum_scan_ray_count', 100)
+        # A healthy 7 Hz revolution from this 5 kHz YDLIDAR contains roughly
+        # 657-660 rays. Captured checksum-corrupted partial revolutions fell as
+        # low as 540, so do not report those as navigation-ready scan data.
+        self.declare_parameter('minimum_scan_ray_count', 600)
         self.declare_parameter('minimum_valid_scan_points', 10)
         self.stream_timeout_sec = float(
             self.get_parameter('stream_timeout_sec').value

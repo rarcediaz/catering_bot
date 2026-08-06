@@ -25,7 +25,13 @@ def make_safety_node(scan_healthy=True):
     node.rear_obstacle_pending_speed_mps = 0.10
     node.rear_obstacle_active = False
     node.left_obstacle_active = False
+    node.left_obstacle_pending = False
+    node.left_obstacle_detection_streak = 0
     node.right_obstacle_active = False
+    node.right_obstacle_pending = False
+    node.right_obstacle_detection_streak = 0
+    node.side_obstacle_confirmation_scans = 2
+    node.side_obstacle_pending_angular_rps = 0.15
     node.speed_limit_scale = 1.0
     node.rear_speed_limit_scale = 1.0
     node.left_turn_scale = 1.0
@@ -44,7 +50,7 @@ def make_safety_node(scan_healthy=True):
     node.turn_in_place_linear_threshold_mps = 0.05
     node.turn_in_place_angular_threshold_radps = 0.20
     node.command_epsilon = 0.005
-    node.minimum_scan_ray_count = 100
+    node.minimum_scan_ray_count = 600
     node.minimum_valid_scan_points = 10
     node.nav_constraint_reason = ''
     node.is_scan_healthy = lambda: scan_healthy
@@ -101,6 +107,7 @@ def test_closed_gate_and_stale_scan_each_fail_closed():
 def test_scan_quality_rejects_truncated_or_empty_lidar_data():
     node = make_safety_node()
     assert node.scan_is_usable(make_scan(10, 1)) is False
+    assert node.scan_is_usable(make_scan(599, 100)) is False
     assert node.scan_is_usable(make_scan(680, 0)) is False
     assert node.scan_is_usable(make_scan(680, 10)) is True
 
@@ -285,6 +292,43 @@ def test_side_obstacles_progressively_slow_only_turns_toward_them():
         make_command(angular=-0.5),
         node.apply_motion_constraints(make_command(angular=-0.5)),
     ) == 'right_turn_slowdown'
+
+
+def test_side_obstacle_requires_two_scans_and_turns_slowly_while_pending():
+    node = make_safety_node()
+
+    assert node.update_side_obstacle_confirmation('left', True) is False
+    assert node.left_obstacle_pending is True
+    assert node.left_obstacle_active is False
+    pending_left = node.apply_motion_constraints(make_command(angular=0.70))
+    assert abs(pending_left.angular.z - 0.15) < 1e-9
+    assert node.apply_motion_constraints(
+        make_command(angular=-0.70)
+    ).angular.z == -0.70
+
+    node.left_obstacle_active = node.update_side_obstacle_confirmation(
+        'left', True
+    )
+    node.left_turn_scale = node.get_side_turn_scale(0.01)
+    assert node.left_obstacle_active is True
+    assert node.left_obstacle_pending is False
+    assert node.apply_motion_constraints(
+        make_command(angular=0.70)
+    ).angular.z == 0.0
+
+    node.left_obstacle_active = node.update_side_obstacle_confirmation(
+        'left', False
+    )
+    node.left_turn_scale = 1.0
+    assert node.left_obstacle_detection_streak == 0
+    assert node.left_obstacle_pending is False
+    assert node.apply_motion_constraints(
+        make_command(angular=0.70)
+    ).angular.z == 0.70
+
+    assert node.update_side_obstacle_confirmation('right', True) is False
+    pending_right = node.apply_motion_constraints(make_command(angular=-0.60))
+    assert abs(pending_right.angular.z + 0.15) < 1e-9
 
 
 def test_side_slowdown_preserves_a_translating_arcs_curvature():

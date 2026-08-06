@@ -148,14 +148,14 @@ def test_local_readiness_requires_filtered_scan_and_odometry():
     assert "'/robot_health/startup_gate_open'" in health
     assert 'and lidar_healthy' in health
     assert 'and odometry_healthy' in health
-    assert "declare_parameter('minimum_scan_ray_count', 100)" in health
+    assert "declare_parameter('minimum_scan_ray_count', 600)" in health
     assert "declare_parameter('minimum_valid_scan_points', 10)" in health
     assert 'self.raw_scan_usable' in health
     assert 'self.filtered_scan_usable' in health
     assert "executable='robot_health_node.py'" in launch
 
     safety = read('scripts/safety_node.py')
-    assert "declare_parameter('minimum_scan_ray_count', 100)" in safety
+    assert "declare_parameter('minimum_scan_ray_count', 600)" in safety
     assert "declare_parameter('minimum_valid_scan_points', 10)" in safety
     assert 'self.latest_scan_quality_healthy' in safety
 
@@ -676,6 +676,10 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     assert 'def get_side_turn_scale' in safety
     assert "declare_parameter('side_hard_stop_distance_m', 0.08)" in safety
     assert "declare_parameter('side_min_speed_scale', 0.25)" in safety
+    assert "declare_parameter('side_obstacle_confirmation_scans', 2)" in safety
+    assert "declare_parameter('side_obstacle_pending_angular_rps', 0.15)" in safety
+    assert 'def update_side_obstacle_confirmation' in safety
+    assert 'def get_pending_side_turn_scale' in safety
     assert "declare_parameter('turn_in_place_linear_threshold_mps', 0.05)" in safety
     assert (
         "declare_parameter('turn_in_place_angular_threshold_radps', 0.20)"
@@ -773,7 +777,10 @@ def test_serial_devices_are_launch_parameters():
 
 def test_lidar_publishes_real_revolution_instead_of_broken_fixed_size():
     lidar = read('config/ydlidar.yaml')
+    canonicalizer = read('scripts/scan_canonicalizer.py')
     assert re.search(r'fixed_resolution:\s*false\b', lidar)
+    assert 'MINIMUM_SCAN_RAY_COUNT = 600' in canonicalizer
+    assert 'Dropping incomplete LaserScan' in canonicalizer
 
 
 def test_cyclonedds_base_config_has_no_machine_specific_peers():

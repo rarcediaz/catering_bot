@@ -27,6 +27,12 @@ def generate_launch_description():
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_hard_stop_distance_m = LaunchConfiguration('side_hard_stop_distance_m')
     side_min_speed_scale = LaunchConfiguration('side_min_speed_scale')
+    side_obstacle_confirmation_scans = LaunchConfiguration(
+        'side_obstacle_confirmation_scans'
+    )
+    side_obstacle_pending_angular_rps = LaunchConfiguration(
+        'side_obstacle_pending_angular_rps'
+    )
     side_stop_start_y_m = LaunchConfiguration('side_stop_start_y_m')
     turn_in_place_linear_threshold_mps = LaunchConfiguration(
         'turn_in_place_linear_threshold_mps'
@@ -60,6 +66,8 @@ def generate_launch_description():
             'side_stop_distance_m': side_stop_distance_m,
             'side_hard_stop_distance_m': side_hard_stop_distance_m,
             'side_min_speed_scale': side_min_speed_scale,
+            'side_obstacle_confirmation_scans': side_obstacle_confirmation_scans,
+            'side_obstacle_pending_angular_rps': side_obstacle_pending_angular_rps,
             'side_stop_start_y_m': side_stop_start_y_m,
             'turn_in_place_linear_threshold_mps': turn_in_place_linear_threshold_mps,
             'turn_in_place_angular_threshold_radps': turn_in_place_angular_threshold_radps,
@@ -167,6 +175,20 @@ def generate_launch_description():
             description=(
                 'Minimum progressive turn scale immediately outside the side '
                 'hard-stop boundary.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'side_obstacle_confirmation_scans',
+            default_value='2',
+            description=(
+                'Consecutive filtered scans required to confirm a side obstacle.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'side_obstacle_pending_angular_rps',
+            default_value='0.15',
+            description=(
+                'Turn-speed cap while the first side detection awaits confirmation.'
             )
         ),
         DeclareLaunchArgument(
