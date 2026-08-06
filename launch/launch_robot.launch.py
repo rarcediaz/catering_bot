@@ -34,6 +34,18 @@ def generate_launch_description():
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
     rear_stop_start_x_m = LaunchConfiguration('rear_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
+    front_obstacle_confirmation_scans = LaunchConfiguration(
+        'front_obstacle_confirmation_scans'
+    )
+    front_obstacle_pending_speed_mps = LaunchConfiguration(
+        'front_obstacle_pending_speed_mps'
+    )
+    rear_obstacle_confirmation_scans = LaunchConfiguration(
+        'rear_obstacle_confirmation_scans'
+    )
+    rear_obstacle_pending_speed_mps = LaunchConfiguration(
+        'rear_obstacle_pending_speed_mps'
+    )
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_hard_stop_distance_m = LaunchConfiguration('side_hard_stop_distance_m')
     side_min_speed_scale = LaunchConfiguration('side_min_speed_scale')
@@ -90,6 +102,10 @@ def generate_launch_description():
             'front_stop_start_x_m': front_stop_start_x_m,
             'rear_stop_start_x_m': rear_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
+            'front_obstacle_confirmation_scans': front_obstacle_confirmation_scans,
+            'front_obstacle_pending_speed_mps': front_obstacle_pending_speed_mps,
+            'rear_obstacle_confirmation_scans': rear_obstacle_confirmation_scans,
+            'rear_obstacle_pending_speed_mps': rear_obstacle_pending_speed_mps,
             'side_stop_distance_m': side_stop_distance_m,
             'side_hard_stop_distance_m': side_hard_stop_distance_m,
             'side_min_speed_scale': side_min_speed_scale,
@@ -142,15 +158,10 @@ def generate_launch_description():
         arguments=[
             "diff_cont",
             "--controller-manager", "/controller_manager",
-            "--controller-manager-timeout", "30",
+            "--controller-manager-timeout", "60",
+            "--service-call-timeout", "60",
+            "--switch-timeout", "60",
         ],
-    )
-
-    delayed_diff_drive_spawner = RegisterEventHandler(
-        event_handler=OnProcessStart(
-            target_action=controller_manager,
-            on_start=[diff_drive_spawner],
-        )
     )
 
     joint_broad_spawner = Node(
@@ -159,7 +170,9 @@ def generate_launch_description():
         arguments=[
             "joint_broad",
             "--controller-manager", "/controller_manager",
-            "--controller-manager-timeout", "30",
+            "--controller-manager-timeout", "60",
+            "--service-call-timeout", "60",
+            "--switch-timeout", "60",
         ],
     )
 
@@ -167,6 +180,19 @@ def generate_launch_description():
         event_handler=OnProcessStart(
             target_action=controller_manager,
             on_start=[joint_broad_spawner],
+        )
+    )
+
+    # Do not issue concurrent load requests while ros2_control is still
+    # initializing the serial hardware. On a busy Pi, diff_cont previously
+    # timed out, completed loading in the background, then failed its retry as
+    # "already loaded" and remained unconfigured forever. Finish and activate
+    # the joint-state broadcaster first, then load diff_cont with service and
+    # switch timeouts long enough for a cold boot.
+    delayed_diff_drive_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=joint_broad_spawner,
+            on_exit=[diff_drive_spawner],
         )
     )
 
@@ -290,18 +316,46 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
-            default_value='0.09',
+            default_value='0.12',
             description='Distance from lidar to the robot front edge in meters.'
         ),
         DeclareLaunchArgument(
             'rear_stop_start_x_m',
-            default_value='0.91',
+            default_value='0.88',
             description='Distance from lidar to the robot rear edge in meters.'
         ),
         DeclareLaunchArgument(
             'front_stop_width_m',
             default_value='0.8596',
             description='Width of the forward stop corridor in meters.'
+        ),
+        DeclareLaunchArgument(
+            'front_obstacle_confirmation_scans',
+            default_value='3',
+            description=(
+                'Consecutive filtered scans required to confirm a front hard stop.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'front_obstacle_pending_speed_mps',
+            default_value='0.10',
+            description=(
+                'Forward crawl cap while the first front detection awaits confirmation.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'rear_obstacle_confirmation_scans',
+            default_value='3',
+            description=(
+                'Consecutive filtered scans required to confirm a rear hard stop.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'rear_obstacle_pending_speed_mps',
+            default_value='0.10',
+            description=(
+                'Reverse crawl cap while a rear detection awaits confirmation.'
+            )
         ),
         DeclareLaunchArgument(
             'side_stop_distance_m',

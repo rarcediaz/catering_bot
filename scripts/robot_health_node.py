@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Publish local Pi hardware-stack readiness from fresh ROS data streams."""
+"""Publish local Pi hardware-stack readiness from usable ROS data streams."""
 
+import math
 import time
 
 import rclpy
@@ -17,16 +18,28 @@ class RobotHealthNode(Node):
 
         self.declare_parameter('stream_timeout_sec', 1.0)
         self.declare_parameter('startup_grace_sec', 15.0)
+        self.declare_parameter('minimum_scan_ray_count', 100)
+        self.declare_parameter('minimum_valid_scan_points', 10)
         self.stream_timeout_sec = float(
             self.get_parameter('stream_timeout_sec').value
         )
         self.startup_grace_sec = float(
             self.get_parameter('startup_grace_sec').value
         )
+        self.minimum_scan_ray_count = max(
+            1,
+            int(self.get_parameter('minimum_scan_ray_count').value),
+        )
+        self.minimum_valid_scan_points = max(
+            1,
+            int(self.get_parameter('minimum_valid_scan_points').value),
+        )
 
         self.started_at = time.monotonic()
         self.last_raw_scan = None
         self.last_filtered_scan = None
+        self.raw_scan_usable = False
+        self.filtered_scan_usable = False
         self.last_odom = None
         self.last_joint_state = None
         self.last_safety_health = None
@@ -90,11 +103,26 @@ class RobotHealthNode(Node):
             'automatically opened startup gate.'
         )
 
-    def raw_scan_callback(self, _msg):
-        self.last_raw_scan = time.monotonic()
+    def scan_is_usable(self, msg):
+        if len(msg.ranges) < self.minimum_scan_ray_count:
+            return False
+        valid_points = sum(
+            1
+            for distance in msg.ranges
+            if (
+                math.isfinite(distance)
+                and msg.range_min <= distance <= msg.range_max
+            )
+        )
+        return valid_points >= self.minimum_valid_scan_points
 
-    def filtered_scan_callback(self, _msg):
+    def raw_scan_callback(self, msg):
+        self.last_raw_scan = time.monotonic()
+        self.raw_scan_usable = self.scan_is_usable(msg)
+
+    def filtered_scan_callback(self, msg):
         self.last_filtered_scan = time.monotonic()
+        self.filtered_scan_usable = self.scan_is_usable(msg)
 
     def odom_callback(self, _msg):
         self.last_odom = time.monotonic()
@@ -122,8 +150,14 @@ class RobotHealthNode(Node):
 
     def publish_health(self):
         now = time.monotonic()
-        raw_scan_healthy = self.is_fresh(self.last_raw_scan, now)
-        filtered_scan_healthy = self.is_fresh(self.last_filtered_scan, now)
+        raw_scan_healthy = (
+            self.is_fresh(self.last_raw_scan, now)
+            and self.raw_scan_usable
+        )
+        filtered_scan_healthy = (
+            self.is_fresh(self.last_filtered_scan, now)
+            and self.filtered_scan_usable
+        )
         odometry_healthy = self.is_fresh(self.last_odom, now)
         joint_state_healthy = self.is_fresh(self.last_joint_state, now)
         safety_healthy = (

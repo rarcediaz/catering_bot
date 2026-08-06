@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT / 'scripts'))
 
@@ -14,6 +15,14 @@ def make_safety_node(scan_healthy=True):
     node = ObstacleSafetyNode.__new__(ObstacleSafetyNode)
     node.startup_gate_open = True
     node.front_obstacle_active = False
+    node.front_obstacle_pending = False
+    node.front_obstacle_detection_streak = 0
+    node.front_obstacle_confirmation_scans = 3
+    node.front_obstacle_pending_speed_mps = 0.10
+    node.rear_obstacle_pending = False
+    node.rear_obstacle_detection_streak = 0
+    node.rear_obstacle_confirmation_scans = 3
+    node.rear_obstacle_pending_speed_mps = 0.10
     node.rear_obstacle_active = False
     node.left_obstacle_active = False
     node.right_obstacle_active = False
@@ -35,6 +44,8 @@ def make_safety_node(scan_healthy=True):
     node.turn_in_place_linear_threshold_mps = 0.05
     node.turn_in_place_angular_threshold_radps = 0.20
     node.command_epsilon = 0.005
+    node.minimum_scan_ray_count = 100
+    node.minimum_valid_scan_points = 10
     node.nav_constraint_reason = ''
     node.is_scan_healthy = lambda: scan_healthy
     return node
@@ -45,6 +56,16 @@ def make_command(linear=0.0, angular=0.0):
     command.linear.x = linear
     command.angular.z = angular
     return command
+
+
+def make_scan(ray_count, valid_count):
+    scan = LaserScan()
+    scan.range_min = 0.1
+    scan.range_max = 12.0
+    scan.ranges = [1.0] * valid_count + [float('inf')] * (
+        ray_count - valid_count
+    )
+    return scan
 
 
 class RecordingPublisher:
@@ -76,6 +97,13 @@ def test_closed_gate_and_stale_scan_each_fail_closed():
     assert stopped.linear.x == 0.0
     assert stopped.angular.z == 0.0
 
+
+def test_scan_quality_rejects_truncated_or_empty_lidar_data():
+    node = make_safety_node()
+    assert node.scan_is_usable(make_scan(10, 1)) is False
+    assert node.scan_is_usable(make_scan(680, 0)) is False
+    assert node.scan_is_usable(make_scan(680, 10)) is True
+
     node = make_safety_node(scan_healthy=False)
     stopped = node.apply_motion_constraints(make_command(0.4, 0.5))
     assert stopped.linear.x == 0.0
@@ -95,6 +123,50 @@ def test_front_obstacle_blocks_forward_but_allows_reverse():
 
     # A front stop does not prohibit a separately collision-checked pure turn.
     assert node.apply_motion_constraints(make_command(angular=0.5)).angular.z == 0.5
+
+
+def test_front_obstacle_requires_three_scans_and_crawls_while_pending():
+    node = make_safety_node()
+
+    assert node.update_front_obstacle_confirmation(True) is False
+    assert node.front_obstacle_pending is True
+    pending = node.apply_motion_constraints(make_command(0.5, 0.5))
+    assert pending.linear.x == 0.10
+    assert pending.angular.z == 0.10
+
+    assert node.update_front_obstacle_confirmation(True) is False
+    node.front_obstacle_active = node.update_front_obstacle_confirmation(True)
+    assert node.front_obstacle_active is True
+    confirmed = node.apply_motion_constraints(make_command(0.5, 0.5))
+    assert confirmed.linear.x == 0.0
+    assert confirmed.angular.z == 0.0
+
+    node.front_obstacle_active = node.update_front_obstacle_confirmation(False)
+    assert node.front_obstacle_active is False
+    assert node.front_obstacle_pending is False
+    assert node.front_obstacle_detection_streak == 0
+
+
+def test_rear_obstacle_requires_three_scans_and_crawls_while_pending():
+    node = make_safety_node()
+
+    assert node.update_rear_obstacle_confirmation(True) is False
+    assert node.rear_obstacle_pending is True
+    pending = node.apply_motion_constraints(make_command(-0.5, -0.5))
+    assert pending.linear.x == -0.10
+    assert pending.angular.z == -0.10
+
+    assert node.update_rear_obstacle_confirmation(True) is False
+    node.rear_obstacle_active = node.update_rear_obstacle_confirmation(True)
+    assert node.rear_obstacle_active is True
+    confirmed = node.apply_motion_constraints(make_command(-0.5, -0.5))
+    assert confirmed.linear.x == 0.0
+    assert confirmed.angular.z == 0.0
+
+    node.rear_obstacle_active = node.update_rear_obstacle_confirmation(False)
+    assert node.rear_obstacle_active is False
+    assert node.rear_obstacle_pending is False
+    assert node.rear_obstacle_detection_streak == 0
 
 
 def test_navigation_near_zero_arc_becomes_a_side_checked_in_place_turn():

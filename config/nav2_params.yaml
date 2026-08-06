@@ -189,7 +189,10 @@ controller_server:
       vx_max: 0.50
       vx_min: -0.50
       vy_max: 0.0
-      wz_max: 0.80
+      # Limit normal path corrections so the long trolley does not sweep into
+      # nearby obstacles while MPPI is correcting a large heading error.
+      # Recovery behaviors retain their separately configured turn limit.
+      wz_max: 0.60
       temperature: 0.3
       gamma: 0.015
       # Give a transient all-invalid sample batch one extra resampling attempt
@@ -199,20 +202,21 @@ controller_server:
       motion_model: "DiffDrive"
       visualize: false
       reset_period: 1.0
-      # Include enough NavFn path for every predicted trajectory while keeping
+      # Include enough lattice path for every predicted trajectory while keeping
       # the closest-path search within the rolling local costmap.
       prune_distance: 2.0
       # Logs show occasional map/odom scheduling gaps approaching 0.60 s over
       # the robot Wi-Fi link. Absorb those without weakening the Pi's
       # independent command deadman or its fresh-lidar motion constraints.
       transform_tolerance: 0.70
-      # Prefer the front-lidar-covered direction for normal route travel while
-      # retaining finite-cost reverse as a short escape/repositioning option.
+      # Score forward and reverse equally. The trolley may therefore back out
+      # of a wall-facing pose or approach a wall-adjacent goal rear-first when
+      # that produces the safer footprint-checked trajectory.
       # There is no GoalAngleCritic because catering stops are positions and
       # must not trigger a final heading spin. There is deliberately no
       # TwirlingCritic: angular-only trajectories remain valid normal-driving
       # candidates and are still collision-scored using the full footprint.
-      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic", "FinalApproachDirectionCritic"]
+      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "FinalApproachDirectionCritic"]
       ConstraintCritic:
         enabled: true
         cost_power: 1
@@ -249,8 +253,11 @@ controller_server:
         trajectory_point_step: 4
         threshold_to_consider: 0.5
         offset_from_furthest: 10
-        # NavFn does not encode a required travel direction in path yaw.
-        use_path_orientations: false
+        # SmacPlannerLattice encodes the footprint-safe body heading and travel
+        # direction at each path pose. Follow that orientation so the axle does
+        # not track the XY centerline while the trolley's long front sweeps
+        # across a wall or keepout boundary.
+        use_path_orientations: true
       PathFollowCritic:
         enabled: true
         cost_power: 1
@@ -270,16 +277,6 @@ controller_server:
         # Humble's bidirectional mode compares forward and mirrored headings,
         # allowing MPPI to select the shorter collision-checked direction.
         forward_preference: false
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        # This is a preference, not a prohibition: a collision-checked reverse
-        # can still win when every forward rollout is blocked or substantially
-        # worse. Apply it during route travel, then hand off to GoalCritic for
-        # the final 1.4 m. A robot already approaching in reverse can therefore
-        # keep reversing instead of turning around just before it arrives.
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
       FinalApproachDirectionCritic:
         enabled: true
         cost_power: 1
@@ -452,9 +449,9 @@ planner_server:
     planner_plugins: ["GridBased"]
     GridBased:
       # The differential-drive lattice checks the trolley's full rectangular
-      # footprint while searching. Its primitive set contains curved travel
-      # and in-place rotations, while the penalties retain a preference for
-      # forward, non-rotating motion when either route is viable.
+      # footprint while searching. Its primitive set contains forward,
+      # reverse, curved travel, and in-place rotations. Forward and reverse
+      # have equal cost so clearance and route quality decide between them.
       plugin: "nav2_smac_planner/SmacPlannerLattice"
       tolerance: 0.25
       allow_unknown: false
@@ -463,7 +460,7 @@ planner_server:
       max_planning_time: 5.0
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
-      reverse_penalty: 2.0
+      reverse_penalty: 1.0
       change_penalty: 0.05
       non_straight_penalty: 1.05
       cost_penalty: 2.0
@@ -541,8 +538,8 @@ velocity_smoother:
     # from the previous smoothed command; the Pi safety node and diff-drive
     # controller still enforce local stopping and hardware limits.
     feedback: "OPEN_LOOP"
-    max_velocity: [0.50, 0.0, 0.80]
-    min_velocity: [-0.50, 0.0, -0.80]
+    max_velocity: [0.50, 0.0, 0.60]
+    min_velocity: [-0.50, 0.0, -0.60]
     max_accel: [0.35, 0.0, 1.50]
     max_decel: [-2.00, 0.0, -1.80]
     odom_topic: "/diff_cont/odom"

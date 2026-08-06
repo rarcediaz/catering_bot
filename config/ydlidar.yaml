@@ -11,9 +11,10 @@ ydlidar:
     intensity: false
     sample_rate: 5
     abnormal_check_count: 4
-    # Keep ray count and angular increment stable for local filtering and
-    # central-computer SLAM/localization consumers.
-    fixed_resolution: true
+    # Publish the lidar's real 678-681 point revolution. On this device the SDK
+    # sometimes miscomputes its fixed size as 10 after a cold boot, truncating
+    # the raw scan to one usable point and making AMCL localization impossible.
+    fixed_resolution: false
     reversion: true
     inverted: true
     auto_reconnect: true

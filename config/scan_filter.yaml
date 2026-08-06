@@ -5,22 +5,31 @@ scan_filter_chain:
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: chassis
-        min_x: -0.08
-        max_x: 1.12
-        min_y: -0.34
-        max_y: 0.36
+        # The measured frame is 1.005 x 0.600 m in the chassis frame. Include
+        # only a small 5 cm rear and 2 cm side tolerance around the physical
+        # body. Beam 620 flickers on the former -4 cm numerical boundary.
+        # Returns farther behind remain visible as potential obstacles.
+        min_x: -0.05
+        max_x: 1.005
+        min_y: -0.32
+        max_y: 0.32
         min_z: -0.08
         max_z: 0.20
         invert: false
     filter2:
-      name: rear_left_corner_filter
+      name: rear_right_corner_filter
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: chassis
+        # The rear-right chassis reflection moves between beams 32 and 33 as
+        # corrupted lidar packets shift the scan indexing. Its current-session
+        # bounds are x=[-0.111, -0.040], y=[-0.345, -0.315] m in chassis.
+        # Mask only this narrow corner pocket; the center and left rear
+        # corridors remain fully visible to the Pi-local safety layer.
         min_x: -0.12
-        max_x: 0.18
-        min_y: 0.18
-        max_y: 0.40
+        max_x: -0.03
+        min_y: -0.36
+        max_y: -0.30
         min_z: -0.08
-        max_z: 0.25
+        max_z: 0.20
         invert: false

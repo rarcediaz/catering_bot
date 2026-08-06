@@ -20,9 +20,15 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('obstacle_stop_distance_max_m', 0.60)
         self.declare_parameter('obstacle_stop_speed_mps', 0.60)
         self.declare_parameter('obstacle_slowdown_margin_m', 0.15)
-        self.declare_parameter('front_stop_start_x_m', 0.09)
-        self.declare_parameter('rear_stop_start_x_m', 0.91)
+        # Laser-frame distances to the physical front and rear chassis edges.
+        # The lidar is 0.73 m ahead of the drive axle (0.88 m in chassis).
+        self.declare_parameter('front_stop_start_x_m', 0.12)
+        self.declare_parameter('rear_stop_start_x_m', 0.88)
         self.declare_parameter('front_stop_width_m', 0.8596)
+        self.declare_parameter('front_obstacle_confirmation_scans', 3)
+        self.declare_parameter('front_obstacle_pending_speed_mps', 0.10)
+        self.declare_parameter('rear_obstacle_confirmation_scans', 3)
+        self.declare_parameter('rear_obstacle_pending_speed_mps', 0.10)
         self.declare_parameter('side_stop_distance_m', 0.25)
         self.declare_parameter('side_hard_stop_distance_m', 0.08)
         self.declare_parameter('side_min_speed_scale', 0.25)
@@ -36,6 +42,8 @@ class ObstacleSafetyNode(Node):
         self.declare_parameter('nav_timeout_sec', 0.50)
         self.declare_parameter('nav_stop_hold_sec', 0.5)
         self.declare_parameter('scan_timeout_sec', 0.5)
+        self.declare_parameter('minimum_scan_ray_count', 100)
+        self.declare_parameter('minimum_valid_scan_points', 10)
         self.declare_parameter('startup_quiet_sec', 5.0)
         self.declare_parameter('command_epsilon', 0.005)
 
@@ -52,6 +60,22 @@ class ObstacleSafetyNode(Node):
         self.rear_stop_start_x_m = float(self.get_parameter('rear_stop_start_x_m').value)
         self.front_stop_width_m = float(self.get_parameter('front_stop_width_m').value)
         self.front_stop_half_width_m = 0.5 * self.front_stop_width_m
+        self.front_obstacle_confirmation_scans = max(
+            1,
+            int(self.get_parameter('front_obstacle_confirmation_scans').value),
+        )
+        self.front_obstacle_pending_speed_mps = max(
+            0.0,
+            float(self.get_parameter('front_obstacle_pending_speed_mps').value),
+        )
+        self.rear_obstacle_confirmation_scans = max(
+            1,
+            int(self.get_parameter('rear_obstacle_confirmation_scans').value),
+        )
+        self.rear_obstacle_pending_speed_mps = max(
+            0.0,
+            float(self.get_parameter('rear_obstacle_pending_speed_mps').value),
+        )
         self.side_stop_distance_m = float(self.get_parameter('side_stop_distance_m').value)
         self.side_hard_stop_distance_m = max(
             0.0,
@@ -77,15 +101,27 @@ class ObstacleSafetyNode(Node):
         self.nav_timeout_sec = float(self.get_parameter('nav_timeout_sec').value)
         self.nav_stop_hold_sec = float(self.get_parameter('nav_stop_hold_sec').value)
         self.scan_timeout_sec = float(self.get_parameter('scan_timeout_sec').value)
+        self.minimum_scan_ray_count = max(
+            1,
+            int(self.get_parameter('minimum_scan_ray_count').value),
+        )
+        self.minimum_valid_scan_points = max(
+            1,
+            int(self.get_parameter('minimum_valid_scan_points').value),
+        )
         self.startup_quiet_sec = float(
             self.get_parameter('startup_quiet_sec').value
         )
         self.command_epsilon = float(self.get_parameter('command_epsilon').value)
 
         self.front_obstacle_active = False
+        self.front_obstacle_pending = False
+        self.front_obstacle_detection_streak = 0
         self.left_obstacle_active = False
         self.right_obstacle_active = False
         self.rear_obstacle_active = False
+        self.rear_obstacle_pending = False
+        self.rear_obstacle_detection_streak = 0
         self.closest_forward_clearance = math.inf
         self.closest_left_clearance = math.inf
         self.closest_right_clearance = math.inf
@@ -102,6 +138,7 @@ class ObstacleSafetyNode(Node):
         self.latest_joy_time = None
         self.latest_nav_time = None
         self.latest_scan_time = None
+        self.latest_scan_quality_healthy = False
         self.joy_was_active = False
         self.nav_was_active = False
         self.nav_stop_hold_until = 0.0
@@ -251,8 +288,22 @@ class ObstacleSafetyNode(Node):
             return True
         return (
             self.latest_scan_time is not None and
+            self.latest_scan_quality_healthy and
             (time.monotonic() - self.latest_scan_time) <= self.scan_timeout_sec
         )
+
+    def scan_is_usable(self, msg):
+        if len(msg.ranges) < self.minimum_scan_ray_count:
+            return False
+        valid_points = sum(
+            1
+            for distance in msg.ranges
+            if (
+                math.isfinite(distance)
+                and msg.range_min <= distance <= msg.range_max
+            )
+        )
+        return valid_points >= self.minimum_valid_scan_points
 
     def is_twist_nonzero(self, cmd):
         return (
@@ -370,6 +421,75 @@ class ObstacleSafetyNode(Node):
         )
         return max(0.0, min(1.0, allowed_speed / command_speed))
 
+    def update_front_obstacle_confirmation(self, detected):
+        """Reject isolated front returns without ignoring the first sample.
+
+        A pending return is handled by get_front_speed_scale(), which
+        immediately limits forward motion to a crawl. Consecutive returns
+        confirm the hard stop. This preserves a response to a newly
+        appearing obstacle while rejecting the one-scan open-space artifacts
+        observed from the lidar.
+        """
+        if detected:
+            self.front_obstacle_detection_streak += 1
+        else:
+            self.front_obstacle_detection_streak = 0
+
+        confirmed = (
+            detected and
+            self.front_obstacle_detection_streak >=
+            self.front_obstacle_confirmation_scans
+        )
+        self.front_obstacle_pending = detected and not confirmed
+        return confirmed
+
+    def get_front_speed_scale(self, command_speed):
+        command_speed = abs(command_speed)
+        if command_speed <= self.command_epsilon:
+            return 1.0
+        if self.front_obstacle_active:
+            return 0.0
+        if self.front_obstacle_pending:
+            return max(
+                0.0,
+                min(1.0, self.front_obstacle_pending_speed_mps / command_speed),
+            )
+        return self.get_clearance_speed_scale(
+            self.closest_forward_clearance,
+            command_speed,
+        )
+
+    def update_rear_obstacle_confirmation(self, detected):
+        """Apply the same short-burst rejection to the rear corridor."""
+        if detected:
+            self.rear_obstacle_detection_streak += 1
+        else:
+            self.rear_obstacle_detection_streak = 0
+
+        confirmed = (
+            detected and
+            self.rear_obstacle_detection_streak >=
+            self.rear_obstacle_confirmation_scans
+        )
+        self.rear_obstacle_pending = detected and not confirmed
+        return confirmed
+
+    def get_rear_speed_scale(self, command_speed):
+        command_speed = abs(command_speed)
+        if command_speed <= self.command_epsilon:
+            return 1.0
+        if self.rear_obstacle_active:
+            return 0.0
+        if self.rear_obstacle_pending:
+            return max(
+                0.0,
+                min(1.0, self.rear_obstacle_pending_speed_mps / command_speed),
+            )
+        return self.get_clearance_speed_scale(
+            self.closest_rear_clearance,
+            command_speed,
+        )
+
     def get_side_turn_scale(self, clearance):
         """Scale a turn toward a close side obstacle without stop/start chatter."""
         if not math.isfinite(clearance) or clearance >= self.side_stop_distance_m:
@@ -425,21 +545,11 @@ class ObstacleSafetyNode(Node):
         if normalize_turn_in_place:
             limited.linear.x = 0.0
 
-        if self.front_obstacle_active and limited.linear.x > 0.0:
-            translation_scale = 0.0
-        elif limited.linear.x > 0.0:
-            translation_scale = self.get_clearance_speed_scale(
-                self.closest_forward_clearance,
-                limited.linear.x,
-            )
+        if limited.linear.x > 0.0:
+            translation_scale = self.get_front_speed_scale(limited.linear.x)
 
-        if self.rear_obstacle_active and limited.linear.x < 0.0:
-            translation_scale = 0.0
-        elif limited.linear.x < 0.0:
-            translation_scale = self.get_clearance_speed_scale(
-                self.closest_rear_clearance,
-                limited.linear.x,
-            )
+        if limited.linear.x < 0.0:
+            translation_scale = self.get_rear_speed_scale(limited.linear.x)
 
         # The central controller collision-checks a complete linear/angular
         # trajectory. Scaling only its translation turns a safe arc into a
@@ -500,18 +610,12 @@ class ObstacleSafetyNode(Node):
         if raw_cmd.linear.x > self.command_epsilon:
             if self.front_obstacle_active:
                 return 'front_stop'
-            if self.get_clearance_speed_scale(
-                self.closest_forward_clearance,
-                raw_cmd.linear.x,
-            ) < 1.0:
+            if self.get_front_speed_scale(raw_cmd.linear.x) < 1.0:
                 return 'front_slowdown'
         elif raw_cmd.linear.x < -self.command_epsilon:
             if self.rear_obstacle_active:
                 return 'rear_stop'
-            if self.get_clearance_speed_scale(
-                self.closest_rear_clearance,
-                raw_cmd.linear.x,
-            ) < 1.0:
+            if self.get_rear_speed_scale(raw_cmd.linear.x) < 1.0:
                 return 'rear_slowdown'
         if (
             raw_cmd.angular.z > self.command_epsilon and
@@ -669,11 +773,13 @@ class ObstacleSafetyNode(Node):
         if not self.obstacle_stop_enabled:
             return
         self.latest_scan_time = time.monotonic()
+        self.latest_scan_quality_healthy = self.scan_is_usable(msg)
 
         closest_forward_clearance = math.inf
         closest_left_clearance = math.inf
         closest_right_clearance = math.inf
         closest_rear_clearance = math.inf
+        closest_rear_point = None
 
         for index, distance in enumerate(msg.ranges):
             angle = msg.angle_min + (index * msg.angle_increment)
@@ -698,7 +804,9 @@ class ObstacleSafetyNode(Node):
                 and abs(point_y) <= self.front_stop_half_width_m
             ):
                 rear_clearance = (-point_x) - self.rear_stop_start_x_m
-                closest_rear_clearance = min(closest_rear_clearance, rear_clearance)
+                if rear_clearance < closest_rear_clearance:
+                    closest_rear_clearance = rear_clearance
+                    closest_rear_point = (index, point_x, point_y, distance)
 
             if -self.rear_stop_start_x_m <= point_x <= self.front_stop_start_x_m:
                 if point_y >= self.side_stop_start_y_m:
@@ -709,10 +817,18 @@ class ObstacleSafetyNode(Node):
                     closest_right_clearance = min(closest_right_clearance, right_clearance)
 
         dynamic_stop_distance, forward_speed = self.get_dynamic_stop_distance()
-        front_obstacle_detected = closest_forward_clearance <= dynamic_stop_distance
+        raw_front_obstacle_detected = (
+            closest_forward_clearance <= dynamic_stop_distance
+        )
+        front_obstacle_detected = self.update_front_obstacle_confirmation(
+            raw_front_obstacle_detected
+        )
         left_obstacle_detected = closest_left_clearance <= self.side_stop_distance_m
         right_obstacle_detected = closest_right_clearance <= self.side_stop_distance_m
-        rear_obstacle_detected = closest_rear_clearance <= dynamic_stop_distance
+        raw_rear_obstacle_detected = closest_rear_clearance <= dynamic_stop_distance
+        rear_obstacle_detected = self.update_rear_obstacle_confirmation(
+            raw_rear_obstacle_detected
+        )
 
         previous_front = self.front_obstacle_active
         previous_left = self.left_obstacle_active
@@ -733,20 +849,12 @@ class ObstacleSafetyNode(Node):
 
         active_cmd = self.get_active_command()
         if active_cmd is not None and active_cmd.linear.x > self.command_epsilon:
-            self.speed_limit_scale = (
-                0.0 if front_obstacle_detected else self.get_clearance_speed_scale(
-                    closest_forward_clearance,
-                    active_cmd.linear.x,
-                )
-            )
+            self.speed_limit_scale = self.get_front_speed_scale(active_cmd.linear.x)
         else:
             self.speed_limit_scale = 1.0
         if active_cmd is not None and active_cmd.linear.x < -self.command_epsilon:
-            self.rear_speed_limit_scale = (
-                0.0 if rear_obstacle_detected else self.get_clearance_speed_scale(
-                    closest_rear_clearance,
-                    active_cmd.linear.x,
-                )
+            self.rear_speed_limit_scale = self.get_rear_speed_scale(
+                active_cmd.linear.x
             )
         else:
             self.rear_speed_limit_scale = 1.0
@@ -804,11 +912,19 @@ class ObstacleSafetyNode(Node):
             f'{self.side_hard_stop_distance_m:.2f}m).',
             'Right side clear.'
         )
+        rear_point_detail = ''
+        if closest_rear_point is not None:
+            rear_point_detail = (
+                f'; beam={closest_rear_point[0]}, '
+                f'laser_x={closest_rear_point[1]:.3f}, '
+                f'laser_y={closest_rear_point[2]:.3f}, '
+                f'range={closest_rear_point[3]:.3f}'
+            )
         self.log_obstacle_transition(
             rear_obstacle_detected,
             previous_rear,
             f'Rear motion blocked ({closest_rear_clearance:.2f}m <= '
-            f'{dynamic_stop_distance:.2f}m).',
+            f'{dynamic_stop_distance:.2f}m{rear_point_detail}).',
             'Rear area clear.'
         )
 

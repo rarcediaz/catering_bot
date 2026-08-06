@@ -12,6 +12,19 @@ def read(relative_path):
     return (PACKAGE_ROOT / relative_path).read_text(encoding='utf-8')
 
 
+def read_pgm(relative_path):
+    with (PACKAGE_ROOT / relative_path).open('rb') as stream:
+        assert stream.readline().strip() == b'P5'
+        dimensions = stream.readline()
+        while dimensions.startswith(b'#'):
+            dimensions = stream.readline()
+        width, height = (int(value) for value in dimensions.split())
+        max_value = int(stream.readline())
+        pixels = stream.read()
+    assert len(pixels) == width * height
+    return width, height, max_value, pixels
+
+
 def test_systemd_selects_only_production_hardware_launch():
     unit = read('systemd/my-bot-robot.service.in')
     wrapper = read('scripts/start_robot_stack.sh')
@@ -135,7 +148,41 @@ def test_local_readiness_requires_filtered_scan_and_odometry():
     assert "'/robot_health/startup_gate_open'" in health
     assert 'and lidar_healthy' in health
     assert 'and odometry_healthy' in health
+    assert "declare_parameter('minimum_scan_ray_count', 100)" in health
+    assert "declare_parameter('minimum_valid_scan_points', 10)" in health
+    assert 'self.raw_scan_usable' in health
+    assert 'self.filtered_scan_usable' in health
     assert "executable='robot_health_node.py'" in launch
+
+    safety = read('scripts/safety_node.py')
+    assert "declare_parameter('minimum_scan_ray_count', 100)" in safety
+    assert "declare_parameter('minimum_valid_scan_points', 10)" in safety
+    assert 'self.latest_scan_quality_healthy' in safety
+
+
+def test_diff_drive_spawner_waits_for_joint_broadcaster_and_slow_hardware():
+    launch = read('launch/launch_robot.launch.py')
+
+    joint_spawner = launch[
+        launch.index('joint_broad_spawner = Node('):
+        launch.index('delayed_joint_broad_spawner = RegisterEventHandler(')
+    ]
+    diff_spawner = launch[
+        launch.index('diff_drive_spawner = Node('):
+        launch.index('joint_broad_spawner = Node(')
+    ]
+    for spawner in (joint_spawner, diff_spawner):
+        assert '"--controller-manager-timeout", "60"' in spawner
+        assert '"--service-call-timeout", "60"' in spawner
+        assert '"--switch-timeout", "60"' in spawner
+
+    sequencing = launch[
+        launch.index('delayed_diff_drive_spawner = RegisterEventHandler('):
+        launch.index('controller_manager_exit = RegisterEventHandler(')
+    ]
+    assert 'event_handler=OnProcessExit(' in sequencing
+    assert 'target_action=joint_broad_spawner' in sequencing
+    assert 'on_exit=[diff_drive_spawner]' in sequencing
 
 
 def test_controller_and_firmware_timeouts_are_short():
@@ -214,8 +261,10 @@ def test_navigation_speed_ceiling_matches_hardware_limit():
 
 def test_base_link_is_drive_axle_midpoint_and_geometry_is_consistent():
     core = read('description/robot_core.xacro')
+    lidar = read('description/lidar.xacro')
     controllers = read('config/my_controllers.yaml')
     nav2 = read('config/nav2_params.yaml')
+    safety = read('scripts/safety_node.py')
 
     modeled_separation = float(
         re.search(r'name="wheel_separation" value="([0-9.]+)"', core).group(1)
@@ -229,11 +278,43 @@ def test_base_link_is_drive_axle_midpoint_and_geometry_is_consistent():
     assert 'xyz="0 ${wheel_separation / 2} -0.0538"' in core
     assert 'xyz="0 -${wheel_separation / 2} -0.0538"' in core
     assert '<origin xyz="-0.15 0 0"/>' in core
+    assert '<origin xyz="0.88 0 0.082" rpy="0 0 0"/>' in lidar
+    assert "declare_parameter('front_stop_start_x_m', 0.12)" in safety
+    assert "declare_parameter('rear_stop_start_x_m', 0.88)" in safety
+    assert "declare_parameter('front_obstacle_confirmation_scans', 3)" in safety
+    assert "declare_parameter('front_obstacle_pending_speed_mps', 0.10)" in safety
+    assert "declare_parameter('rear_obstacle_confirmation_scans', 3)" in safety
+    assert "declare_parameter('rear_obstacle_pending_speed_mps', 0.10)" in safety
     axle_centered_footprint = (
         'footprint: "[[-0.15, -0.305], [0.917, -0.305], '
         '[0.917, 0.305], [-0.15, 0.305]]"'
     )
     assert nav2.count(axle_centered_footprint) == 2
+
+
+def test_lidar_self_filter_covers_measured_frame_with_small_edge_tolerance():
+    scan_filter = read('config/scan_filter.yaml')
+
+    # The physical frame is x=[0.0, 1.005], y=[-0.300, 0.300] in chassis.
+    # Keep only a small edge tolerance plus targeted rear-right reflection
+    # masks; the center and left rear safety corridors must remain visible.
+    assert re.search(r'min_x:\s*-0\.05\b', scan_filter)
+    assert re.search(r'max_x:\s*1\.005\b', scan_filter)
+    assert re.search(r'min_y:\s*-0\.32\b', scan_filter)
+    assert re.search(r'max_y:\s*0\.32\b', scan_filter)
+    assert scan_filter.count('type: laser_filters/LaserScanBoxFilter') == 2
+    assert 'type: laser_filters/LaserScanMaskFilter' not in scan_filter
+    assert 'rear_right_edge_ray_filter' not in scan_filter
+    assert 'rear_right_corner_filter' in scan_filter
+    assert re.search(r'min_x:\s*-0\.12\b', scan_filter)
+    assert re.search(r'max_x:\s*-0\.03\b', scan_filter)
+    assert re.search(r'min_y:\s*-0\.36\b', scan_filter)
+    assert re.search(r'max_y:\s*-0\.30\b', scan_filter)
+    assert 'rear_left_corner_filter' not in scan_filter
+    safety = read('scripts/safety_node.py')
+    assert "f'; beam={closest_rear_point[0]}, '" in safety
+    assert "f'laser_x={closest_rear_point[1]:.3f}, '" in safety
+    assert "f'laser_y={closest_rear_point[2]:.3f}, '" in safety
 
 
 def test_navigation_finishes_by_position_without_a_final_heading_spin():
@@ -274,7 +355,7 @@ def test_normal_path_tracking_may_choose_a_footprint_checked_in_place_turn():
     assert re.search(r'motion_model:\s*"DiffDrive"', nav2)
     assert re.search(r'vx_std:\s*0\.25\b', nav2)
     assert re.search(r'wz_std:\s*0\.65\b', nav2)
-    assert re.search(r'wz_max:\s*0\.80\b', nav2)
+    assert re.search(r'wz_max:\s*0\.60\b', nav2)
     assert re.search(r'max_angle_to_furthest:\s*0\.75\b', nav2)
     assert not re.search(r'^\s+TwirlingCritic:', nav2, re.MULTILINE)
 
@@ -287,6 +368,13 @@ def test_normal_path_tracking_may_choose_a_footprint_checked_in_place_turn():
     ) == 2
     assert 'plugin: "nav2_controller::PositionGoalChecker"' in nav2
     assert 'RotationShimController' not in nav2
+
+
+def test_mppi_follows_smac_lattice_body_orientations():
+    nav2 = read('config/nav2_params.yaml')
+
+    assert 'plugin: "nav2_smac_planner/SmacPlannerLattice"' in nav2
+    assert re.search(r'use_path_orientations:\s*true\b', nav2)
 
 
 def test_mppi_retries_a_transient_invalid_batch_before_costmap_recovery():
@@ -308,7 +396,7 @@ def test_mppi_retries_a_transient_invalid_batch_before_costmap_recovery():
     )
 
 
-def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
+def test_mppi_is_direction_neutral_and_allows_safe_reverse_travel():
     nav2 = read('config/nav2_params.yaml')
     controller_hz = float(
         re.search(r'controller_frequency:\s*([0-9.]+)', nav2).group(1)
@@ -338,22 +426,18 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
     assert re.search(
         r'critics:\s*\["ConstraintCritic", "ObstaclesCritic", "GoalCritic", '
         r'"PathAlignCritic", "PathFollowCritic", "PathAngleCritic", '
-        r'"PreferForwardCritic", "FinalApproachDirectionCritic"\]',
+        r'"FinalApproachDirectionCritic"\]',
         nav2,
     )
-    assert re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
-    assert re.search(
-        r'PreferForwardCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
-        r'(?:#.*\s*)*cost_weight:\s*5\.0\s*'
-        r'threshold_to_consider:\s*1\.4',
-        nav2,
-    )
+    assert not re.search(r'^\s+PreferForwardCritic:', nav2, re.MULTILINE)
     assert not re.search(r'^\s+GoalAngleCritic:', nav2, re.MULTILINE)
     assert not re.search(r'^\s+TwirlingCritic:', nav2, re.MULTILINE)
     assert re.search(r'motion_model:\s*"DiffDrive"', nav2)
     assert re.search(r'vx_min:\s*-0\.50\b', nav2)
     assert re.search(r'forward_preference:\s*false\b', nav2)
-    assert re.search(r'use_path_orientations:\s*false\b', nav2)
+    # Reverse remains available, but direction changes now happen where the
+    # feasible lattice path requests them instead of wherever MPPI prefers.
+    assert re.search(r'use_path_orientations:\s*true\b', nav2)
     goal_threshold = float(
         re.search(
             r'GoalCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
@@ -361,23 +445,15 @@ def test_mppi_prefers_front_lidar_travel_without_forbidding_reverse():
             nav2,
         ).group(1)
     )
-    forward_threshold = float(
-        re.search(
-            r'PreferForwardCritic:\s*enabled:\s*true\s*cost_power:\s*1\s*'
-            r'(?:#.*\s*)*cost_weight:\s*5\.0\s*'
-            r'threshold_to_consider:\s*([0-9.]+)',
-            nav2,
-        ).group(1)
-    )
-    # Route travel prefers the front-lidar direction. At the final-approach
-    # boundary, position convergence takes over without inducing a late flip.
-    assert forward_threshold == goal_threshold == 1.4
+    # Position convergence takes over inside 1.4 m without imposing a final
+    # heading or favoring either linear direction.
+    assert goal_threshold == 1.4
     assert controller_hz == 10.0
     assert model_dt == 1.0 / controller_hz
     # The predicted axle travel plus the front overhang remains inside the
     # 2.5 m half-width of the rolling local costmap.
     assert time_steps * model_dt * max_vel_x + 0.917 < 2.5
-    assert max_vel_theta == 0.80
+    assert max_vel_theta == 0.60
     assert smoother_theta == max_vel_theta
     assert re.search(r'max_accel:\s*\[0\.35,\s*0\.0,\s*1\.50\]', nav2)
     assert re.search(r'max_decel:\s*\[-2\.00,\s*0\.0,\s*-1\.80\]', nav2)
@@ -460,6 +536,7 @@ def test_global_planner_uses_pi_compatible_differential_drive_primitives():
         'output.json"'
     ) in nav2
     assert re.search(r'allow_reverse_expansion:\s*true\b', nav2)
+    assert re.search(r'reverse_penalty:\s*1\.0\b', nav2)
     assert re.search(r'rotation_penalty:\s*5\.0\b', nav2)
     assert re.search(r'cost_penalty:\s*2\.0\b', nav2)
     assert '<exec_depend>nav2_smac_planner</exec_depend>' in package
@@ -476,10 +553,53 @@ def test_preferred_route_mask_is_a_separate_global_soft_cost_filter():
     assert "name='preferred_mask_server'" in nav2_launch
     assert "'topic_name': 'preferred_filter_mask'" in nav2_launch
     assert "'mask_topic': '/preferred_filter_mask'" in nav2_launch
+    assert nav2_launch.count("'type': 0") == 2
+    assert nav2_launch.count("'base': 0.0") == 2
+    assert nav2_launch.count("'multiplier': 1.0") == 2
     assert "'use_preferred': use_preferred" in central_launch
+    assert "'use_keepout': use_keepout" in central_launch
     assert "'maps', 'atrium_preferred.yaml'" in central_launch
+    assert "'maps', 'atrium_keepout.yaml'" in central_launch
+    assert re.search(
+        r"'use_keepout',\s*default_value='true'", central_launch
+    )
+    assert re.search(
+        r"'use_preferred',\s*default_value='true'", central_launch
+    )
     assert re.search(r'mode:\s*scale\b', preferred_yaml)
     assert re.search(r'resolution:\s*0\.05\b', preferred_yaml)
+
+
+def test_navigation_keepout_and_preferred_rasters_share_map_geometry():
+    yaml_files = (
+        'maps/atrium_navigation.yaml',
+        'maps/atrium_keepout.yaml',
+        'maps/atrium_preferred.yaml',
+        'maps/atrium_display.yaml',
+    )
+    pgm_files = tuple(path.replace('.yaml', '.pgm') for path in yaml_files)
+
+    for yaml_file in yaml_files:
+        metadata = read(yaml_file)
+        assert re.search(r'resolution:\s*0\.05\b', metadata)
+        assert re.search(r'origin:\s*\[0\.0,\s*0\.0,\s*0\.0\]', metadata)
+
+    rasters = {path: read_pgm(path) for path in pgm_files}
+    geometries = {
+        (width, height, max_value)
+        for width, height, max_value, _pixels in rasters.values()
+    }
+    assert geometries == {(1467, 909, 255)}
+
+    keepout = rasters['maps/atrium_keepout.pgm'][3]
+    preferred = rasters['maps/atrium_preferred.pgm'][3]
+    # Hard occupied and free regions must exist in both masks. The preferred
+    # mask must also contain intermediate values, which type-0 KeepoutFilter
+    # converts into traversable soft costs rather than another binary wall.
+    assert 0 in keepout and 255 in keepout
+    assert 0 in preferred and 255 in preferred
+    assert any(0 < value < 255 for value in preferred)
+    assert preferred != keepout
 
 
 def test_thin_dynamic_obstacles_persist_across_lidar_sweeps():
@@ -510,7 +630,7 @@ def test_normal_navigation_can_reverse_safely_and_replans_stably():
     assert re.search(r'vx_min:\s*-0\.50\b', nav2)
     assert re.search(r'transform_tolerance:\s*0\.70\b', nav2)
     assert re.search(r'smoothing_frequency:\s*20\.0\b', nav2)
-    assert re.search(r'min_velocity:\s*\[-0\.50,\s*0\.0,\s*-0\.80\]', nav2)
+    assert re.search(r'min_velocity:\s*\[-0\.50,\s*0\.0,\s*-0\.60\]', nav2)
     assert '<RateController hz="0.2">' in behavior_tree
     backup = '<BackUp backup_dist="0.50" backup_speed="0.10"/>'
     spin = '<Spin spin_dist="1.57"/>'
@@ -549,6 +669,10 @@ def test_pi_safety_limits_converge_and_are_persistently_diagnosable():
     assert 'return self.obstacle_stop_distance_m, forward_speed' in get_stop
     assert 'speed_ratio' not in get_stop
     assert 'def get_clearance_speed_scale' in safety
+    assert 'def update_front_obstacle_confirmation' in safety
+    assert 'def get_front_speed_scale' in safety
+    assert 'def update_rear_obstacle_confirmation' in safety
+    assert 'def get_rear_speed_scale' in safety
     assert 'def get_side_turn_scale' in safety
     assert "declare_parameter('side_hard_stop_distance_m', 0.08)" in safety
     assert "declare_parameter('side_min_speed_scale', 0.25)" in safety
@@ -645,6 +769,11 @@ def test_serial_devices_are_launch_parameters():
     assert 'from launch_ros.parameter_descriptions import ParameterValue' in rsp_launch
     assert 'robot_description = ParameterValue(' in rsp_launch
     assert 'value_type=str' in rsp_launch
+
+
+def test_lidar_publishes_real_revolution_instead_of_broken_fixed_size():
+    lidar = read('config/ydlidar.yaml')
+    assert re.search(r'fixed_resolution:\s*false\b', lidar)
 
 
 def test_cyclonedds_base_config_has_no_machine_specific_peers():

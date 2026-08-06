@@ -4,7 +4,9 @@
     <joint name="laser_joint" type="fixed">
         <parent link="chassis"/>
         <child link="laser_frame"/>
-        <origin xyz="0.91 0 0.082" rpy="0 0 0"/>
+        <!-- The drive axle is 0.15 m ahead of the chassis origin, placing
+             the measured lidar center 0.73 m ahead of the axle. -->
+        <origin xyz="0.88 0 0.082" rpy="0 0 0"/>
     </joint>
 
     <link name="laser_frame">

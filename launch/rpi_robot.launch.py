@@ -68,6 +68,18 @@ def generate_launch_description():
     front_stop_start_x_m = LaunchConfiguration('front_stop_start_x_m')
     rear_stop_start_x_m = LaunchConfiguration('rear_stop_start_x_m')
     front_stop_width_m = LaunchConfiguration('front_stop_width_m')
+    front_obstacle_confirmation_scans = LaunchConfiguration(
+        'front_obstacle_confirmation_scans'
+    )
+    front_obstacle_pending_speed_mps = LaunchConfiguration(
+        'front_obstacle_pending_speed_mps'
+    )
+    rear_obstacle_confirmation_scans = LaunchConfiguration(
+        'rear_obstacle_confirmation_scans'
+    )
+    rear_obstacle_pending_speed_mps = LaunchConfiguration(
+        'rear_obstacle_pending_speed_mps'
+    )
     side_stop_distance_m = LaunchConfiguration('side_stop_distance_m')
     side_hard_stop_distance_m = LaunchConfiguration('side_hard_stop_distance_m')
     side_min_speed_scale = LaunchConfiguration('side_min_speed_scale')
@@ -102,6 +114,10 @@ def generate_launch_description():
             'front_stop_start_x_m': front_stop_start_x_m,
             'rear_stop_start_x_m': rear_stop_start_x_m,
             'front_stop_width_m': front_stop_width_m,
+            'front_obstacle_confirmation_scans': front_obstacle_confirmation_scans,
+            'front_obstacle_pending_speed_mps': front_obstacle_pending_speed_mps,
+            'rear_obstacle_confirmation_scans': rear_obstacle_confirmation_scans,
+            'rear_obstacle_pending_speed_mps': rear_obstacle_pending_speed_mps,
             'side_stop_distance_m': side_stop_distance_m,
             'side_hard_stop_distance_m': side_hard_stop_distance_m,
             'side_min_speed_scale': side_min_speed_scale,
@@ -156,18 +172,46 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'front_stop_start_x_m',
-            default_value='0.09',
+            default_value='0.12',
             description='Distance from lidar to the robot front edge in meters.'
         ),
         DeclareLaunchArgument(
             'rear_stop_start_x_m',
-            default_value='0.91',
+            default_value='0.88',
             description='Distance from lidar to the robot rear edge in meters.'
         ),
         DeclareLaunchArgument(
             'front_stop_width_m',
             default_value='0.8596',
             description='Width of the forward stop corridor in meters.'
+        ),
+        DeclareLaunchArgument(
+            'front_obstacle_confirmation_scans',
+            default_value='3',
+            description=(
+                'Consecutive filtered scans required to confirm a front hard stop.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'front_obstacle_pending_speed_mps',
+            default_value='0.10',
+            description=(
+                'Forward crawl cap while the first front detection awaits confirmation.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'rear_obstacle_confirmation_scans',
+            default_value='3',
+            description=(
+                'Consecutive filtered scans required to confirm a rear hard stop.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'rear_obstacle_pending_speed_mps',
+            default_value='0.10',
+            description=(
+                'Reverse crawl cap while a rear detection awaits confirmation.'
+            )
         ),
         DeclareLaunchArgument(
             'side_stop_distance_m',
